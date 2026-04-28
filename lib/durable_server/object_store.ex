@@ -1111,7 +1111,7 @@ defmodule DurableServer.ObjectStore do
     if attempt > max_retries do
       {:error, :max_retries_exceeded}
     else
-      case get_object(client, key) do
+      case get_object(client, key, consistent: true) do
         {:ok, %{body: current_data, etag: current_etag}} ->
           case update_fn.(%{body: current_data, etag: current_etag}) do
             {:ok, new_data} ->

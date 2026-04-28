@@ -309,11 +309,7 @@ defmodule DurableServer.EKVIntegrationTest do
       DurableServer.Supervisor.start_child(
         supervisor_name,
         {TestTemporalServer,
-         %{
-           key: key,
-           occurred_at: occurred_at,
-           nested: %{occurred_at: occurred_at}
-         }}
+         key: key, initial_state: %{occurred_at: occurred_at, nested: %{occurred_at: occurred_at}}}
       )
 
     assert :native_term == GenServer.call(pid, :get_loaded_shape)
@@ -329,7 +325,7 @@ defmodule DurableServer.EKVIntegrationTest do
     {:ok, {pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: key, count: 0}}
+        {CounterServer, key: key, initial_state: %{count: 0}}
       )
 
     assert 1 = GenServer.call(pid, :increment_and_sync)
@@ -343,7 +339,7 @@ defmodule DurableServer.EKVIntegrationTest do
     {:ok, {restarted_pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: key}},
+        {CounterServer, key: key, initial_state: %{}},
         existing: true
       )
 
@@ -360,11 +356,7 @@ defmodule DurableServer.EKVIntegrationTest do
       DurableServer.Supervisor.start_child(
         supervisor_name,
         {TestTemporalServer,
-         %{
-           key: key,
-           occurred_at: occurred_at,
-           nested: %{occurred_at: occurred_at}
-         }}
+         key: key, initial_state: %{occurred_at: occurred_at, nested: %{occurred_at: occurred_at}}}
       )
 
     assert :ok = GenServer.call(pid, :sync_now)
@@ -376,7 +368,7 @@ defmodule DurableServer.EKVIntegrationTest do
     {:ok, {restarted_pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {TestTemporalServer, %{key: key}},
+        {TestTemporalServer, key: key, initial_state: %{}},
         existing: true
       )
 
@@ -397,7 +389,7 @@ defmodule DurableServer.EKVIntegrationTest do
     {:ok, {pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: key, count: 4}}
+        {CounterServer, key: key, initial_state: %{count: 4}}
       )
 
     assert 5 == GenServer.call(pid, :increment_and_sync)
@@ -433,7 +425,7 @@ defmodule DurableServer.EKVIntegrationTest do
         fn _ ->
           DurableServer.Supervisor.start_child(
             supervisor_name,
-            {CounterServer, %{key: key, count: 0}}
+            {CounterServer, key: key, initial_state: %{count: 0}}
           )
         end,
         max_concurrency: 16,
@@ -477,13 +469,13 @@ defmodule DurableServer.EKVIntegrationTest do
     {:ok, _} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: "a", count: 1}}
+        {CounterServer, key: "a", initial_state: %{count: 1}}
       )
 
     {:ok, _} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: "b", count: 2}}
+        {CounterServer, key: "b", initial_state: %{count: 2}}
       )
 
     %{storage_backend: storage_backend} = DurableServer.Supervisor.__get_config__(supervisor_name)

@@ -33,8 +33,9 @@ defmodule DurableServer.LifecycleTest do
       DurableServer.LifecycleTest.atomify_keys(persisted_state)
     end
 
-    def init(loaded_state) do
-      {:ok, Map.put_new(loaded_state, :count, 0), auto_sync: false, meta: %{my: "meta"}}
+    def init(loaded_state, info) do
+      {:ok, loaded_state |> Map.put(:key, info.key) |> Map.put_new(:count, 0),
+       auto_sync: false, meta: %{my: "meta"}}
     end
 
     def handle_call(:get_count, _from, %{count: count} = state) do
@@ -61,9 +62,10 @@ defmodule DurableServer.LifecycleTest do
       DurableServer.LifecycleTest.atomify_keys(persisted_state)
     end
 
-    def init(loaded_state) do
+    def init(loaded_state, info) do
       state =
         loaded_state
+        |> Map.put(:key, info.key)
         |> Map.put_new(:count, 0)
         |> Map.put_new(:terminate_delay_ms, 300)
         |> Map.put_new(:notify_pid, nil)
@@ -501,7 +503,8 @@ defmodule DurableServer.LifecycleTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DelayedTerminateServer, %{key: key, terminate_delay_ms: 300, notify_pid: self()}}
+          {DelayedTerminateServer,
+           key: key, initial_state: %{terminate_delay_ms: 300, notify_pid: self()}}
         )
 
       assert :ok = GenServer.call(pid, {:set_notify_pid, self()})
@@ -578,7 +581,10 @@ defmodule DurableServer.LifecycleTest do
 
       # Start a new server with the same key - should automatically load existing state
       {:ok, {pid2, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Should have the previous state (automatically loaded from object storage)
       assert GenServer.call(pid2, :get_count) == 2
@@ -1409,7 +1415,7 @@ defmodule DurableServer.LifecycleTest do
     {:ok, {pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {TestServer, %{key: key, permanent: true}}
+        {TestServer, key: key, initial_state: %{permanent: true}}
       )
 
     pid

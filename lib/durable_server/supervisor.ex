@@ -19,7 +19,7 @@ defmodule DurableServer.Supervisor do
 
       DurableServer.Supervisor.start_child(
         MyApp.DurableSup,
-        {MyServer, %{key: "user_123"}}
+        {MyServer, key: "user_123", initial_state: %{}}
       )
 
   ## Architecture
@@ -189,7 +189,7 @@ defmodule DurableServer.Supervisor do
       # Start a server
       {:ok, {pid, _meta}} = DurableServer.Supervisor.start_child(
         MyApp.DurableSup,
-        {MyUserServer, %{key: "user_123", name: "Alice"}}
+        {MyUserServer, key: "user_123", initial_state: %{name: "Alice"}}
       )
 
       # Terminate a specific server
@@ -324,7 +324,7 @@ defmodule DurableServer.Supervisor do
       {DurableServer.Supervisor, name: MyDurableSup, prefix: "myapp/"}
       {:ok, {pid, _meta}} = DurableServer.Supervisor.start_child(
         MyDurableSup,
-        {Counter, %{key: "counter123", value: 0}}
+        {Counter, key: "counter123", initial_state: %{value: 0}}
       )
 
       iex> {pid, _meta} = DurableServer.Supervisor.lookup(MyDurableUp, "counter123")
@@ -703,6 +703,13 @@ defmodule DurableServer.Supervisor do
   @doc """
   Starts a DurableServer child process under this supervisor.
 
+  The child spec is `{Module, key: key, initial_state: initial_state}`.
+  `:initial_state` is required and must be a map. Before the first `init/1` or
+  `init/2` call, DurableServer passes it through the module's `dump_state/1`,
+  the configured backend's encode/decode path, and then `load_state/2`. This
+  means the dumped initial state must be encodable by the configured backend,
+  and `load_state/2` receives the backend-decoded shape.
+
   ## Options
 
   - `:local_only` - When `true`, the child will only be started on the local node.
@@ -723,20 +730,20 @@ defmodule DurableServer.Supervisor do
       # Start with init args
       {:ok, {pid, meta}} = DurableServer.Supervisor.start_child(
         MyApp.DurableSup,
-        {MyServer, %{key: "server_1", initial_value: 42}}
+        {MyServer, key: "server_1", initial_state: %{initial_value: 42}}
       )
 
       # Start locally only — never attempt remote placement
       {:ok, {pid, meta}} = DurableServer.Supervisor.start_child(
         MyApp.DurableSup,
-        {MyServer, %{key: "server_1"}},
+        {MyServer, key: "server_1", initial_state: %{}},
         local_only: true
       )
 
       # Retry placement for up to 15 seconds during rolling deploys
       {:ok, {pid, meta}} = DurableServer.Supervisor.start_child(
         MyApp.DurableSup,
-        {MyServer, %{key: "server_1"}},
+        {MyServer, key: "server_1", initial_state: %{}},
         placement_timeout: 15_000
       )
 
@@ -744,12 +751,78 @@ defmodule DurableServer.Supervisor do
       defmodule MyServer do
         use DurableServer, vsn: 1
 
-        def init(%{key: key, initial_value: value}) do
-          {:ok, %{key: key, value: value}, meta: %{my: "meta"}}
+        def init(%{initial_value: value}, info) do
+          {:ok, %{value: value, key: info.key}, meta: %{my: "meta"}}
         end
       end
   """
-  def start_child(supervisor, {module, init_arg}, opts \\ []) do
+  def start_child(supervisor, child_spec, opts \\ [])
+
+  def start_child(supervisor, {module, init_arg}, opts) do
+    init_arg = validate_child_init_arg!(init_arg, "start_child")
+
+    __start_child__(supervisor, {module, init_arg, nil}, opts)
+  end
+
+  def start_child(_supervisor, child_spec, _opts) do
+    raise ArgumentError,
+          "start_child expects {Module, key: \"...\", initial_state: %{...}}, got: #{inspect(child_spec)}"
+  end
+
+  @doc false
+  def __start_child__(supervisor, child_spec, opts \\ [])
+
+  def __start_child__(supervisor, {module, init_arg, boot_info}, opts)
+      when is_map(boot_info) or is_nil(boot_info) do
+    init_arg = validate_child_init_arg!(init_arg, "__start_child__")
+
+    do_start_child_with_init_arg(supervisor, {module, init_arg, boot_info}, opts)
+  end
+
+  def __start_child__(_supervisor, child_spec, _opts) do
+    raise ArgumentError,
+          "__start_child__ expects {Module, init_arg, boot_info}, got: #{inspect(child_spec)}"
+  end
+
+  defp validate_child_init_arg!(args, function_name) when is_list(args) do
+    args = Keyword.validate!(args, [:key, :initial_state])
+
+    key =
+      case Keyword.fetch(args, :key) do
+        {:ok, key} when is_binary(key) ->
+          key
+
+        {:ok, other} ->
+          raise ArgumentError, "#{function_name} :key must be a binary, got: #{inspect(other)}"
+
+        :error ->
+          raise ArgumentError, "#{function_name} requires :key"
+      end
+
+    initial_state =
+      case Keyword.fetch(args, :initial_state) do
+        {:ok, initial_state} when is_map(initial_state) ->
+          initial_state
+
+        {:ok, other} ->
+          raise ArgumentError,
+                "#{function_name} :initial_state must be a map, got: #{inspect(other)}"
+
+        :error ->
+          raise ArgumentError, "#{function_name} requires :initial_state"
+      end
+
+    args
+    |> Keyword.put(:key, key)
+    |> Keyword.put(:initial_state, initial_state)
+  end
+
+  defp validate_child_init_arg!(init_arg, function_name) do
+    raise ArgumentError,
+          "#{function_name} expects {Module, key: \"...\", initial_state: %{...}}, got: #{inspect(init_arg)}"
+  end
+
+  defp do_start_child_with_init_arg(supervisor, {module, init_arg, boot_info}, opts) do
     opts =
       Keyword.validate!(opts, [
         :max_placement_retries,
@@ -789,9 +862,9 @@ defmodule DurableServer.Supervisor do
         end
       end
 
-      with {:ok, init_arg} <-
-             check_existing(supervisor, init_arg, Keyword.get(opts, :existing, false)) do
-        child_spec = {module, init_arg}
+      with {:ok, boot_info} <-
+             check_existing(supervisor, init_arg, boot_info, Keyword.get(opts, :existing, false)) do
+        child_spec = {module, init_arg, boot_info}
 
         case do_start_child(supervisor, child_spec, 0, caller_deadline_ms, reply_to) do
           {:ok, result} ->
@@ -822,30 +895,42 @@ defmodule DurableServer.Supervisor do
     end
   end
 
-  defp check_existing(_supervisor, init_arg, false), do: {:ok, init_arg}
+  defp check_existing(_supervisor, _init_arg, boot_info, false), do: {:ok, boot_info}
 
-  defp check_existing(supervisor, init_arg, true) do
-    key =
-      case init_arg do
-        %{key: key} ->
-          key
-
-        _ ->
-          raise ArgumentError,
-                "existing: true requires init_arg to be a map with :key field, got: #{inspect(init_arg)}"
-      end
+  defp check_existing(supervisor, init_arg, _boot_info, true) do
+    key = Keyword.fetch!(init_arg, :key)
 
     config = __get_config__(supervisor)
     storage_key = config.prefix <> key
 
     case StorageBackend.get_object(config.storage_backend, storage_key, consistent: true) do
       {:ok, %{body: body, etag: etag}} ->
-        {:ok, {:restart, %{key: key, body: body, etag: etag}}}
+        {:ok, preloaded_boot_info(body, etag)}
 
       {:error, _} ->
         {:error, :not_found}
     end
   end
+
+  defp preloaded_boot_info(body, etag, opts \\ []) do
+    %{
+      preloaded: %{body: body, etag: etag},
+      is_sticky_local: Keyword.get(opts, :is_sticky_local, false)
+    }
+  end
+
+  defp boot_info_preloaded_object(nil), do: nil
+  defp boot_info_preloaded_object(%{} = boot_info) when map_size(boot_info) == 0, do: nil
+
+  defp boot_info_preloaded_object(
+         %{
+           preloaded: %{body: %StoredState{}, etag: _etag} = preloaded,
+           is_sticky_local: is_sticky_local
+         } = boot_info
+       )
+       when is_boolean(is_sticky_local) and map_size(boot_info) == 2 and
+              map_size(preloaded) == 2,
+       do: preloaded
 
   defp caller_timeout!(opts) when is_list(opts) do
     case Keyword.get(opts, :timeout, @default_start_child_timeout) do
@@ -901,37 +986,31 @@ defmodule DurableServer.Supervisor do
     end
   end
 
-  defp do_start_child(supervisor, {module, init_arg}, retries, _deadline_ms, _reply_to)
+  defp do_start_child(
+         supervisor,
+         {module, init_arg, _boot_info},
+         retries,
+         _deadline_ms,
+         _reply_to
+       )
        when retries > @max_start_child_tries do
-    key =
-      case init_arg do
-        {:restart, %{key: key}} ->
-          key
-
-        %{key: key} ->
-          key
-      end
+    key = Keyword.fetch!(init_arg, :key)
 
     raise RuntimeError,
           "#{inspect(supervisor)} failed to `DurableServer.Supervisor.start_child` for #{inspect(module)} (key=#{key}) after #{@max_start_child_tries} tries"
   end
 
-  defp do_start_child(supervisor, {module, init_arg}, retries, deadline_ms, reply_to) do
+  defp do_start_child(
+         supervisor,
+         {module, init_arg, boot_info},
+         retries,
+         deadline_ms,
+         reply_to
+       ) do
     if deadline_exceeded?(deadline_ms) do
       {:error, :timeout}
     else
-      key =
-        case init_arg do
-          {:restart, %{key: key}} ->
-            key
-
-          %{key: key} ->
-            key
-
-          _ ->
-            raise ArgumentError,
-                  "start_child expects a map with :key field, got: #{inspect(init_arg)}"
-        end
+      key = Keyword.fetch!(init_arg, :key)
 
       # Check group first to avoid spawning a process that will just fail at registration
       case lookup(supervisor, key) do
@@ -944,6 +1023,7 @@ defmodule DurableServer.Supervisor do
               supervisor,
               module,
               init_arg,
+              boot_info,
               key,
               retries,
               deadline_ms,
@@ -956,12 +1036,30 @@ defmodule DurableServer.Supervisor do
           {:error, {:already_started, {pid, meta}}}
 
         nil ->
-          do_start_child_inner(supervisor, module, init_arg, key, retries, deadline_ms, reply_to)
+          do_start_child_inner(
+            supervisor,
+            module,
+            init_arg,
+            boot_info,
+            key,
+            retries,
+            deadline_ms,
+            reply_to
+          )
       end
     end
   end
 
-  defp do_start_child_inner(supervisor, module, init_arg, key, retries, deadline_ms, reply_to) do
+  defp do_start_child_inner(
+         supervisor,
+         module,
+         init_arg,
+         boot_info,
+         key,
+         retries,
+         deadline_ms,
+         reply_to
+       ) do
     dynamic_sup = get_dynamic_supervisor(supervisor)
     config = __get_config__(supervisor)
     init_ref = make_ref()
@@ -974,6 +1072,7 @@ defmodule DurableServer.Supervisor do
            module: module,
            init_from: init_from,
            init_arg: init_arg,
+           boot_info: boot_info,
            supervisor_name: supervisor,
            config: config
          }},
@@ -996,6 +1095,7 @@ defmodule DurableServer.Supervisor do
                   supervisor,
                   module,
                   init_arg,
+                  boot_info,
                   key,
                   claim_node,
                   retries,
@@ -1038,6 +1138,7 @@ defmodule DurableServer.Supervisor do
                   supervisor,
                   module,
                   init_arg,
+                  boot_info,
                   key,
                   claim_node,
                   retries,
@@ -1091,6 +1192,7 @@ defmodule DurableServer.Supervisor do
                 supervisor,
                 module,
                 init_arg,
+                boot_info,
                 key,
                 pid,
                 retries,
@@ -1103,6 +1205,7 @@ defmodule DurableServer.Supervisor do
                 supervisor,
                 module,
                 init_arg,
+                boot_info,
                 key,
                 claim_node,
                 retries,
@@ -1123,6 +1226,7 @@ defmodule DurableServer.Supervisor do
                 supervisor,
                 module,
                 init_arg,
+                boot_info,
                 key,
                 pid,
                 retries,
@@ -1135,6 +1239,7 @@ defmodule DurableServer.Supervisor do
                 supervisor,
                 module,
                 init_arg,
+                boot_info,
                 key,
                 claim_node,
                 retries,
@@ -1159,6 +1264,7 @@ defmodule DurableServer.Supervisor do
          supervisor,
          module,
          init_arg,
+         boot_info,
          key,
          pid,
          retries,
@@ -1203,7 +1309,7 @@ defmodule DurableServer.Supervisor do
 
                   do_start_child(
                     supervisor,
-                    {module, init_arg},
+                    {module, init_arg, boot_info},
                     retries + 1,
                     deadline_ms,
                     reply_to
@@ -1227,7 +1333,7 @@ defmodule DurableServer.Supervisor do
 
                 do_start_child(
                   supervisor,
-                  {module, init_arg},
+                  {module, init_arg, boot_info},
                   retries + 1,
                   deadline_ms,
                   reply_to
@@ -1241,7 +1347,7 @@ defmodule DurableServer.Supervisor do
 
             do_start_child(
               supervisor,
-              {module, init_arg},
+              {module, init_arg, boot_info},
               retries + 1,
               deadline_ms,
               reply_to
@@ -1254,6 +1360,7 @@ defmodule DurableServer.Supervisor do
          supervisor,
          module,
          init_arg,
+         boot_info,
          key,
          claim_node,
          retries,
@@ -1283,6 +1390,7 @@ defmodule DurableServer.Supervisor do
                 supervisor,
                 module,
                 init_arg,
+                boot_info,
                 key,
                 claim_node,
                 retries,
@@ -1294,7 +1402,7 @@ defmodule DurableServer.Supervisor do
           unhealthy when unhealthy in [:stale, :unknown] ->
             do_start_child(
               supervisor,
-              {module, init_arg},
+              {module, init_arg, boot_info},
               retries + 1,
               deadline_ms,
               reply_to
@@ -1307,6 +1415,7 @@ defmodule DurableServer.Supervisor do
          supervisor,
          module,
          init_arg,
+         boot_info,
          _key,
          _claim_node,
          retries,
@@ -1315,29 +1424,23 @@ defmodule DurableServer.Supervisor do
        ) do
     do_start_child(
       supervisor,
-      {module, init_arg},
+      {module, init_arg, boot_info},
       retries + 1,
       deadline_ms,
       reply_to
     )
   end
 
-  defp try_remote_placement(supervisor, {module, init_arg} = child_spec, max_retries) do
-    # Extract key and sticky_placement from init_arg
-    # If we have {:restart, %{body: body, ...}}, extract sticky_placement directly
-    # to avoid duplicate object storage lookup
-    {key, sticky_placement} =
-      case init_arg do
-        {:restart, %{key: key, body: body}} ->
-          # Get augmented sticky placement (handles module config updates like :any)
-          augmented = __get_augmented_sticky_placement__(supervisor, module, key, body)
-          {key, augmented}
+  defp try_remote_placement(supervisor, {module, init_arg, boot_info} = child_spec, max_retries) do
+    key = Keyword.fetch!(init_arg, :key)
 
-        %{key: key} ->
-          {key, nil}
+    sticky_placement =
+      case boot_info_preloaded_object(boot_info) do
+        %{body: body} ->
+          __get_augmented_sticky_placement__(supervisor, module, key, body)
 
-        _ ->
-          {nil, nil}
+        nil ->
+          nil
       end
 
     candidate_limit =
@@ -1422,6 +1525,9 @@ defmodule DurableServer.Supervisor do
   rescue
     _ -> false
   end
+
+  defp remote_start_child_args({module, init_arg, boot_info}),
+    do: {{module, init_arg, boot_info}, [max_placement_retries: 0]}
 
   defp mark_placement_node_timeout(supervisor, node) when is_atom(supervisor) and is_atom(node) do
     node_str = to_string(node)
@@ -1544,11 +1650,17 @@ defmodule DurableServer.Supervisor do
     {:error, {:capacity_limit, :all_placement_attempts_failed}}
   end
 
-  defp try_nodes(supervisor, {module, _init_arg} = child_spec, [node | rest], placement_opts) do
+  defp try_nodes(
+         supervisor,
+         {module, _init_arg, _boot_info} = child_spec,
+         [node | rest],
+         placement_opts
+       ) do
     Logger.info("Attempting to place #{inspect(module)} on remote node #{inspect(node)}")
     report_placement_diagnostic(supervisor, :remote_placement_erpc_attempt)
     shutdown_retries = Keyword.get(placement_opts, :shutdown_retries, 0)
     erpc_timeout_ms = placement_erpc_timeout_ms(supervisor, node)
+    {remote_child_spec, remote_opts} = remote_start_child_args(child_spec)
 
     # NOTE: we MUST pass max_placement_retries: 0 to prevent recursive retry on the other side
     try do
@@ -1556,11 +1668,11 @@ defmodule DurableServer.Supervisor do
         safe_erpc_call(
           node,
           __MODULE__,
-          :start_child,
+          :__start_child__,
           [
             supervisor,
-            child_spec,
-            [max_placement_retries: 0]
+            remote_child_spec,
+            remote_opts
           ],
           erpc_timeout_ms
         )
@@ -1704,6 +1816,14 @@ defmodule DurableServer.Supervisor do
   process before attempting to start a new one. This is useful when you want to
   ensure a process exists but don't know if it's already running.
 
+  The child spec is `{Module, key: key, initial_state: initial_state}`.
+  `:initial_state` is required and must be a map. If a new process is started
+  and no persisted state exists yet, DurableServer passes `:initial_state`
+  through the module's `dump_state/1`, the configured backend's encode/decode
+  path, and then `load_state/2` before `init/1` or `init/2`. This means the
+  dumped initial state must be encodable by the configured backend, and
+  `load_state/2` receives the backend-decoded shape.
+
   ## Options
 
   - `:local_only` - When `true`, the child will only be started on the local node.
@@ -1729,23 +1849,43 @@ defmodule DurableServer.Supervisor do
       # Will start if not running, or return existing process
       {:ok, {pid, meta}} = DurableServer.Supervisor.ensure_started_child(
         MyApp.DurableSup,
-        {MyServer, %{key: "server_1", initial_value: 42}}
+        {MyServer, key: "server_1", initial_state: %{initial_value: 42}}
       )
 
       # Ensure locally only — never attempt remote placement
       {:ok, {pid, meta}} = DurableServer.Supervisor.ensure_started_child(
         MyApp.DurableSup,
-        {MyServer, %{key: "server_1"}},
+        {MyServer, key: "server_1", initial_state: %{}},
         local_only: true
       )
 
       # Calling again returns the same process
       {:ok, {^pid, ^meta}} = DurableServer.Supervisor.ensure_started_child(
         MyApp.DurableSup,
-        {MyServer, %{key: "server_1", initial_value: 42}}
+        {MyServer, key: "server_1", initial_state: %{initial_value: 42}}
       )
   """
-  def ensure_started_child(supervisor, {module, init_arg} = child_spec, opts \\ []) do
+  def ensure_started_child(supervisor, child_spec, opts \\ [])
+
+  def ensure_started_child(supervisor, {module, init_arg}, opts) do
+    init_arg = validate_child_init_arg!(init_arg, "ensure_started_child")
+
+    __ensure_started_child__(supervisor, {module, init_arg, nil}, opts)
+  end
+
+  def ensure_started_child(_supervisor, child_spec, _opts) do
+    raise ArgumentError,
+          "ensure_started_child expects {Module, key: \"...\", initial_state: %{...}}, got: #{inspect(child_spec)}"
+  end
+
+  @doc false
+  def __ensure_started_child__(supervisor, child_spec, opts \\ [])
+
+  def __ensure_started_child__(supervisor, {module, init_arg, boot_info}, opts)
+      when is_map(boot_info) or is_nil(boot_info) do
+    init_arg = validate_child_init_arg!(init_arg, "__ensure_started_child__")
+    child_spec = {module, init_arg, boot_info}
+
     opts =
       Keyword.validate!(opts, [
         :max_placement_retries,
@@ -1768,6 +1908,11 @@ defmodule DurableServer.Supervisor do
       singleflight_key,
       deadline_ms
     )
+  end
+
+  def __ensure_started_child__(_supervisor, child_spec, _opts) do
+    raise ArgumentError,
+          "__ensure_started_child__ expects {Module, init_arg, boot_info}, got: #{inspect(child_spec)}"
   end
 
   defp do_ensure_started_child_with_deadline(
@@ -1815,6 +1960,7 @@ defmodule DurableServer.Supervisor do
         {:ok, {pid, meta}}
 
       nil ->
+        {_, init_arg, _boot_info} = child_spec
         local_only = Keyword.get(opts, :local_only, false)
         # ensure_started_child should be single-attempt by default so hot paths
         # can control retry policy at the caller boundary.
@@ -1906,13 +2052,11 @@ defmodule DurableServer.Supervisor do
               end
             end
 
-          # Use {:restart, ...} pattern if we have stored object, otherwise regular init
-          # Include is_sticky_local flag for disk check bypass when restarting on sticky node
-          child_spec_with_restart =
+          child_spec_with_boot_info =
             case stored_object do
               {:ok, %{body: body, etag: etag}} ->
-                {module,
-                 {:restart, %{key: key, body: body, etag: etag, is_sticky_local: is_sticky_local}}}
+                {module, init_arg,
+                 preloaded_boot_info(body, etag, is_sticky_local: is_sticky_local)}
 
               nil ->
                 child_spec
@@ -1930,7 +2074,7 @@ defmodule DurableServer.Supervisor do
                 module,
                 key,
                 stored_object,
-                child_spec_with_restart,
+                child_spec_with_boot_info,
                 matching_level,
                 placement_deadline_ms
               )
@@ -1943,9 +2087,9 @@ defmodule DurableServer.Supervisor do
                 |> Keyword.put_new(:placement_timeout, nil)
                 |> Keyword.put(:timeout, timeout_option(deadline_ms))
 
-              case start_child(
+              case __start_child__(
                      supervisor,
-                     child_spec_with_restart,
+                     child_spec_with_boot_info,
                      start_opts
                    ) do
                 {:ok, {pid, meta}} ->
@@ -1962,13 +2106,7 @@ defmodule DurableServer.Supervisor do
     end
   end
 
-  defp ensure_started_child_key!({:restart, %{key: key}}), do: key
-  defp ensure_started_child_key!(%{key: key}), do: key
-
-  defp ensure_started_child_key!(init_arg) do
-    raise ArgumentError,
-          "ensure_started_child expects a map with :key field, got: #{inspect(init_arg)}"
-  end
+  defp ensure_started_child_key!(init_arg), do: Keyword.fetch!(init_arg, :key)
 
   defp ensure_started_singleflight_wait_timeout_ms(deadline_ms) do
     case remaining_timeout_ms(deadline_ms) do
@@ -2276,10 +2414,10 @@ defmodule DurableServer.Supervisor do
   end
 
   defp fallback_to_local_start(supervisor, child_spec) do
-    {_, init_arg} = child_spec
+    {_, init_arg, _boot_info} = child_spec
     key = ensure_started_child_key!(init_arg)
 
-    case start_child(supervisor, child_spec, max_placement_retries: 0) do
+    case __start_child__(supervisor, child_spec, max_placement_retries: 0) do
       {:ok, {pid, meta}} ->
         {:ok, {pid, meta}}
 
@@ -2350,7 +2488,7 @@ defmodule DurableServer.Supervisor do
   ## Parameters
 
   - `supervisor` - The DurableServer.Supervisor name
-  - `child_spec` - The child spec tuple `{module, init_arg}` with a `:key` field
+  - `child_spec` - The child spec tuple `{module, key: "...", initial_state: %{...}}`
   - `opts` - Options:
     - `:target_node` - Specific node atom to place on (optional, defaults to best available)
     - `:force` - If true, ignore sticky placement entirely (default: true)
@@ -2365,32 +2503,24 @@ defmodule DurableServer.Supervisor do
       # Rehome to a specific node
       {:ok, {pid, meta}} = DurableServer.Supervisor.rehome_child(
         MySup,
-        {MyServer, %{key: "server_1"}},
+        {MyServer, key: "server_1", initial_state: %{}},
         target_node: :"node2@host"
       )
 
       # Rehome to any available node (ignoring sticky placement)
       {:ok, {pid, meta}} = DurableServer.Supervisor.rehome_child(
         MySup,
-        {MyServer, %{key: "server_1"}}
+        {MyServer, key: "server_1", initial_state: %{}}
       )
   """
-  def rehome_child(supervisor, {module, init_arg} = child_spec, opts \\ []) do
+  def rehome_child(supervisor, {module, init_arg}, opts \\ []) do
+    init_arg = validate_child_init_arg!(init_arg, "rehome_child")
+    child_spec = {module, init_arg, nil}
+
     opts = Keyword.validate!(opts, [:target_node, :force, :shutdown_timeout])
     shutdown_timeout = Keyword.get(opts, :shutdown_timeout, 15_000)
 
-    key =
-      case init_arg do
-        {:restart, %{key: key}} ->
-          key
-
-        %{key: key} ->
-          key
-
-        _ ->
-          raise ArgumentError,
-                "rehome_child expects a map with :key field, got: #{inspect(init_arg)}"
-      end
+    key = Keyword.fetch!(init_arg, :key)
 
     target_node = Keyword.get(opts, :target_node)
     force = Keyword.get(opts, :force, true)
@@ -2424,17 +2554,18 @@ defmodule DurableServer.Supervisor do
         # Explicit target node specified
         Logger.info("Rehoming #{key}: placing on specified target #{inspect(target_node)}")
         erpc_timeout_ms = placement_erpc_timeout_ms(supervisor, target_node)
+        {remote_child_spec, remote_opts} = remote_start_child_args(child_spec)
 
         try do
           result =
             safe_erpc_call(
               target_node,
               __MODULE__,
-              :start_child,
+              :__start_child__,
               [
                 supervisor,
-                child_spec,
-                [max_placement_retries: 0]
+                remote_child_spec,
+                remote_opts
               ],
               erpc_timeout_ms
             )
@@ -2486,7 +2617,11 @@ defmodule DurableServer.Supervisor do
             # No remote nodes, try local
             Logger.info("No remote nodes available, trying local for rehoming #{key}")
 
-            case start_child(supervisor, child_spec, max_placement_retries: 0) do
+            case __start_child__(
+                   supervisor,
+                   child_spec,
+                   max_placement_retries: 0
+                 ) do
               {:ok, {pid, meta}} ->
                 {:ok, {pid, meta}}
 
@@ -2504,7 +2639,7 @@ defmodule DurableServer.Supervisor do
       true ->
         # Normal ensure_started logic (respects sticky)
         Logger.info("Rehoming #{key}: using normal placement logic")
-        ensure_started_child(supervisor, child_spec)
+        __ensure_started_child__(supervisor, child_spec)
     end
   end
 

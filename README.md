@@ -85,7 +85,7 @@ Start and use individual servers:
 ```elixir
 {:ok, {pid, _meta}} = DurableServer.Supervisor.start_child(
   MyDurableSup,
-  {MyCounterServer, %{key: "user_123", count: 0}}
+  {MyCounterServer, key: "user_123", initial_state: %{count: 0}}
 )
 
 GenServer.call(pid, :increment)  # => 1
@@ -93,12 +93,14 @@ GenServer.call(pid, :increment)  # => 2
 GenServer.call(pid, :get_count)  # => 2
 ```
 
+`:initial_state` is required and must be a map. On first boot, DurableServer
+passes it through `dump_state/1`, the configured backend's encode/decode path,
+and then `load_state/2` before `init/1` or `init/2`. The dumped initial state
+must therefore be encodable by your configured backend.
+
 ## Storage Backends
 
-`DurableServer.Supervisor` supports two configuration styles:
-
-- Legacy (unchanged): `object_store: [...]` or `object_store: %DurableServer.ObjectStore{}`
-- New: `backend: ...`
+`DurableServer` includes two built-in backends:
 
 ### Object Storage Backend
 
@@ -121,6 +123,12 @@ GenServer.call(pid, :get_count)  # => 2
 Start EKV in your application tree (CAS config is required for DurableServer lock semantics):
 
 ```elixir
+ekv_config = [
+  name: :durable_ekv,
+  data_dir: "/path/to/ekv_store",
+  cluster_size: 3
+]
+
 children = [
   {EKV,
    name: :durable_ekv,
@@ -130,7 +138,7 @@ children = [
   {DurableServer.Supervisor,
    name: MyDurableSup,
    prefix: "my_app/",
-   backend: {DurableServer.Backends.EKVStore, [name: :durable_ekv]}}
+   backend: {DurableServer.Backends.EKVStore, ekv_config}}
 ]
 ```
 
@@ -138,30 +146,9 @@ If you use EKV backend, add EKV to your app's dependencies.
 
 ### Mirror Backend (Object Storage -> EKV)
 
-Use the mirror backend to dual-write while you cut over reads/writes in phases:
+Use the mirror backend to dual-write while you cut over reads/writes in phases.
 
-```elixir
-backend:
-  {DurableServer.Backends.MirrorStore,
-   [
-     primary: {DurableServer.Backends.ObjectStore, object_store_opts},
-     secondary: {DurableServer.Backends.EKVStore, [name: :durable_ekv]},
-     read_preference: :primary,
-     write_target: :primary,
-     mirror_writes: true,
-     fallback_reads: true,
-     promote_on_fallback: true
-   ]}
-```
-
-Recommended rollout:
-
-1. Shadow phase: `read_preference: :primary`, `write_target: :primary`, `mirror_writes: true`
-2. Backfill historical objects into EKV
-3. Full cutover: `read_preference: :secondary`, `write_target: :secondary`
-4. Finalize: replace the mirror backend with pure `{DurableServer.Backends.EKVStore, ...}`
-
-`promote_on_fallback: true` ensures fallback reads are copied into the active read backend so returned CAS etags remain backend-local and safe for subsequent lock updates.
+See `DurableServer.Backends.MirrorStore` for usage and an example rollout.
 
 ## Configuration Options
 

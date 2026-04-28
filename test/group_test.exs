@@ -11,8 +11,11 @@ defmodule GroupTest do
 
     def load_state(_old_vsn, persisted_state), do: persisted_state
 
-    def init(loaded_state) do
-      {:ok, Map.put_new(loaded_state, :count, 0), auto_sync: false, meta: %{module: __MODULE__}}
+    def init(loaded_state, info) do
+      {:ok,
+       loaded_state
+       |> Map.put(:key, info.key)
+       |> Map.put_new(:count, 0), auto_sync: false, meta: %{module: __MODULE__}}
     end
 
     def handle_call(:get_count, _from, %{count: count} = state) do
@@ -50,7 +53,11 @@ defmodule GroupTest do
       :ok = Group.monitor(sup, key)
 
       # Start a DurableServer
-      {:ok, {pid, _meta}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+      {:ok, {pid, _meta}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Should receive :registered event with extracted user meta
       assert_receive {:group, [%Group.Event{type: :registered} = event], _}, 1000
@@ -72,9 +79,23 @@ defmodule GroupTest do
       :ok = Group.monitor(sup, "chat/")
 
       # Start servers
-      {:ok, {pid1, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key1}})
-      {:ok, {pid2, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key2}})
-      {:ok, {_pid3, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key3}})
+      {:ok, {pid1, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key1, initial_state: %{}}
+        )
+
+      {:ok, {pid2, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key2, initial_state: %{}}
+        )
+
+      {:ok, {_pid3, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key3, initial_state: %{}}
+        )
 
       # Should receive events for chat/ keys with extracted user meta
       assert_receive {:group,
@@ -110,9 +131,23 @@ defmodule GroupTest do
 
       :ok = Group.monitor(sup, :all)
 
-      {:ok, {pid1, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key1}})
-      {:ok, {pid2, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key2}})
-      {:ok, {pid3, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key3}})
+      {:ok, {pid1, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key1, initial_state: %{}}
+        )
+
+      {:ok, {pid2, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key2, initial_state: %{}}
+        )
+
+      {:ok, {pid3, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key3, initial_state: %{}}
+        )
 
       server_meta = %{module: TestServer}
 
@@ -155,7 +190,11 @@ defmodule GroupTest do
 
       :ok = Group.monitor(sup, key)
 
-      {:ok, {pid, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+      {:ok, {pid, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       assert_receive {:group, [%Group.Event{type: :registered, meta: %{module: TestServer}}], _},
                      1000
@@ -181,7 +220,11 @@ defmodule GroupTest do
 
       :ok = Group.monitor(sup, key)
 
-      {:ok, {pid, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+      {:ok, {pid, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Initial registration
       assert_receive {:group,
@@ -213,7 +256,11 @@ defmodule GroupTest do
 
       :ok = Group.monitor(sup, key)
 
-      {:ok, {pid, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+      {:ok, {pid, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       assert_receive {:group,
                       [
@@ -241,7 +288,11 @@ defmodule GroupTest do
       assert :ok = Group.monitor(sup, key)
       assert :ok = Group.monitor(sup, key)
 
-      {:ok, {pid, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+      {:ok, {pid, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Should only receive one event (not duplicated), with extracted user meta
       assert_receive {:group,
@@ -260,7 +311,11 @@ defmodule GroupTest do
 
       :ok = Group.monitor(sup, "user/")
 
-      {:ok, {pid1, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key1}})
+      {:ok, {pid1, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key1, initial_state: %{}}
+        )
 
       assert_receive {:group,
                       [
@@ -277,7 +332,11 @@ defmodule GroupTest do
       :ok = Group.demonitor(sup, "user/")
 
       # Start another server
-      {:ok, {_pid2, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key2}})
+      {:ok, {_pid2, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key2, initial_state: %{}}
+        )
 
       # Should NOT receive the second event
       refute_receive {:group, _, _}, 200
@@ -294,7 +353,10 @@ defmodule GroupTest do
 
       # Start a DurableServer (registers but does not join)
       {:ok, {_server_pid, _}} =
-        DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Join as a listener
       listener_meta = %{role: :listener}
@@ -310,7 +372,11 @@ defmodule GroupTest do
     test "returns empty list when only a DurableServer is registered", %{supervisor_name: sup} do
       key = "only/server/#{DurableServer.UUID.uuid4()}"
 
-      {:ok, {_pid, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+      {:ok, {_pid, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       assert Group.members(sup, key) == []
     end
@@ -324,8 +390,17 @@ defmodule GroupTest do
       assert Group.registry_count(sup) == 0
       assert Group.local_registry_count(sup) == 0
 
-      {:ok, {_pid1, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key1}})
-      {:ok, {_pid2, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key2}})
+      {:ok, {_pid1, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key1, initial_state: %{}}
+        )
+
+      {:ok, {_pid2, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key2, initial_state: %{}}
+        )
 
       assert Group.registry_count(sup) == 2
       assert Group.local_registry_count(sup) == 2
@@ -368,8 +443,17 @@ defmodule GroupTest do
          max_children: %{TestServer => 10}}
       )
 
-      {:ok, {_pid1, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key1}})
-      {:ok, {_pid2, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key2}})
+      {:ok, {_pid1, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key1, initial_state: %{}}
+        )
+
+      {:ok, {_pid2, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key2, initial_state: %{}}
+        )
 
       assert Group.member_count(sup, module_prefix) == 2
       assert Group.local_member_count(sup, module_prefix) == 2
@@ -384,8 +468,17 @@ defmodule GroupTest do
       key1 = "global/#{DurableServer.UUID.uuid4()}"
       key2 = "global/#{DurableServer.UUID.uuid4()}"
 
-      {:ok, {_pid1, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key1}})
-      {:ok, {_pid2, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key2}})
+      {:ok, {_pid1, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key1, initial_state: %{}}
+        )
+
+      {:ok, {_pid2, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key2, initial_state: %{}}
+        )
 
       members = DurableServer.Supervisor.global_members(sup)
 
@@ -403,7 +496,10 @@ defmodule GroupTest do
 
       # 2. Start DurableServer
       {:ok, {server_pid, _}} =
-        DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       assert_receive {:group,
                       [
@@ -460,7 +556,10 @@ defmodule GroupTest do
 
       # 11. Start new server - should NOT receive event
       {:ok, {_new_pid, _}} =
-        DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key <> "/new"}})
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key <> "/new", initial_state: %{}}
+        )
 
       refute_receive {:group, _, _}, 200
     end
@@ -489,7 +588,10 @@ defmodule GroupTest do
 
       # Start a DurableServer on sup2
       {:ok, {pid2, _}} =
-        DurableServer.Supervisor.start_child(supervisor_name_2, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name_2,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Should receive event from sup2 with extracted user meta
       assert_receive {:group,
@@ -529,7 +631,11 @@ defmodule GroupTest do
       :ok = Group.monitor(sup1, :all)
 
       # Start a DurableServer on sup1 - should receive event with extracted meta
-      {:ok, {pid1, _}} = DurableServer.Supervisor.start_child(sup1, {TestServer, %{key: key}})
+      {:ok, {pid1, _}} =
+        DurableServer.Supervisor.start_child(
+          sup1,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       assert_receive {:group,
                       [
@@ -543,7 +649,12 @@ defmodule GroupTest do
                      1000
 
       # Start a DurableServer on sup2 - should NOT receive event
-      {:ok, {pid2, _}} = DurableServer.Supervisor.start_child(sup2, {TestServer, %{key: key}})
+      {:ok, {pid2, _}} =
+        DurableServer.Supervisor.start_child(
+          sup2,
+          {TestServer, key: key, initial_state: %{}}
+        )
+
       refute_receive {:group, [%Group.Event{supervisor: ^sup2} | _], _}, 200
 
       # Now subscribe to sup2 as well
@@ -578,7 +689,11 @@ defmodule GroupTest do
     test "conflict resolver kills both processes for clean restart", %{supervisor_name: sup} do
       key = "conflict/test/#{DurableServer.UUID.uuid4()}"
 
-      {:ok, {pid, _}} = DurableServer.Supervisor.start_child(sup, {TestServer, %{key: key}})
+      {:ok, {pid, _}} =
+        DurableServer.Supervisor.start_child(
+          sup,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Get the raw internal metadata (bypassing extract_meta)
       {^pid, meta} = Group.lookup(sup, key, extract_meta: & &1)

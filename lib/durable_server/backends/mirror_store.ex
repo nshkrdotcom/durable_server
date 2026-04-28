@@ -108,7 +108,29 @@ defmodule DurableServer.Backends.MirrorStore do
   `mirror_writes` + `promote_on_fallback` are the mechanisms that keep both
   sides converged while shifting those pointers.
 
-  ## Recommended Cutover Sequence
+  ## Example Rollout
+
+  Configure the supervisor with the mirror backend while moving from object
+  storage to EKV:
+
+  ```elixir
+  {DurableServer.Supervisor,
+   name: MyDurableSup,
+   prefix: "my_app/",
+   backend:
+     {DurableServer.Backends.MirrorStore,
+      [
+        primary: {DurableServer.Backends.ObjectStore, object_store_opts},
+        secondary: {DurableServer.Backends.EKVStore, [name: :durable_ekv]},
+        read_preference: :primary,
+        write_target: :primary,
+        mirror_writes: true,
+        fallback_reads: true,
+        promote_on_fallback: true
+      ]}}
+  ```
+
+  One possible rollout sequence:
 
   ```text
   Phase 1: Shadow
@@ -125,6 +147,10 @@ defmodule DurableServer.Backends.MirrorStore do
   Phase 4: Finalize
     switch to single-backend config (e.g. pure EKV)
   ```
+
+  `promote_on_fallback: true` ensures fallback reads are copied into the active
+  read backend so returned CAS etags remain backend-local and safe for
+  subsequent lock updates.
 
   A read-only cutover (`read_preference=:secondary`, `write_target=:primary`)
   is not safe for existing DurableServer restarts because etags/vsns are

@@ -65,7 +65,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
     {:ok, {pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: key, count: 2}}
+        {CounterServer, key: key, initial_state: %{count: 2}}
       )
 
     assert 3 == GenServer.call(pid, :increment_and_sync)
@@ -148,7 +148,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
     assert {:error, reason} =
              DurableServer.Supervisor.start_child(
                supervisor_name,
-               {CounterServer, %{key: key, count: 0}}
+               {CounterServer, key: key, initial_state: %{count: 0}}
              )
 
     assert match?({:mirror_failed, _}, reason) or match?({:noproc, _}, reason)
@@ -172,7 +172,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
     {:ok, {pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: key, count: 11}}
+        {CounterServer, key: key, initial_state: %{count: 11}}
       )
 
     assert 12 == GenServer.call(pid, :increment_and_sync)
@@ -236,7 +236,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
     {:ok, {pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: new_key, count: 30}}
+        {CounterServer, key: new_key, initial_state: %{count: 30}}
       )
 
     assert 31 == GenServer.call(pid, :increment_and_sync)
@@ -277,7 +277,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
     {:ok, {pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: key, count: 20}}
+        {CounterServer, key: key, initial_state: %{count: 20}}
       )
 
     assert 21 == GenServer.call(pid, :increment_and_sync)
@@ -314,7 +314,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
     {:ok, {restarted_pid, _meta}} =
       DurableServer.Supervisor.start_child(
         supervisor_name,
-        {CounterServer, %{key: key}},
+        {CounterServer, key: key, initial_state: %{}},
         existing: true
       )
 

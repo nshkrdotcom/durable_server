@@ -7,8 +7,8 @@ defmodule DurableServer.WatermarkTest do
     use DurableServer, vsn: 1
 
     @impl true
-    def init(state) do
-      {:ok, state}
+    def init(state, info) do
+      {:ok, Map.put(state, :key, info.key)}
     end
 
     @impl true
@@ -45,20 +45,20 @@ defmodule DurableServer.WatermarkTest do
       assert {:ok, {_pid1, _meta1}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key1"}}
+                 {WatermarkTestServer, key: "key1", initial_state: %{}}
                )
 
       assert {:ok, {_pid2, _meta2}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key2"}}
+                 {WatermarkTestServer, key: "key2", initial_state: %{}}
                )
 
       # Third should fail (disable remote placement for this test)
       assert {:error, {:capacity_limit, :max_children_total}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key3"}},
+                 {WatermarkTestServer, key: "key3", initial_state: %{}},
                  max_placement_retries: 0
                )
     end
@@ -80,14 +80,14 @@ defmodule DurableServer.WatermarkTest do
       assert {:ok, {_pid1, _meta1}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key1"}}
+                 {WatermarkTestServer, key: "key1", initial_state: %{}}
                )
 
       # Second should fail (disable remote placement for this test)
       assert {:error, {:capacity_limit, :max_children_module}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key2"}},
+                 {WatermarkTestServer, key: "key2", initial_state: %{}},
                  max_placement_retries: 0
                )
     end
@@ -100,7 +100,7 @@ defmodule DurableServer.WatermarkTest do
         use DurableServer, vsn: 1
 
         @impl true
-        def init(state), do: {:ok, state}
+        def init(state, info), do: {:ok, Map.put(state, :key, info.key)}
 
         @impl true
         def dump_state(state), do: state
@@ -126,27 +126,27 @@ defmodule DurableServer.WatermarkTest do
       assert {:ok, {_pid1, _}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key1"}}
+                 {WatermarkTestServer, key: "key1", initial_state: %{}}
                )
 
       assert {:ok, {_pid2, _}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key2"}}
+                 {WatermarkTestServer, key: "key2", initial_state: %{}}
                )
 
       # Start 1 of second module (hits global limit)
       assert {:ok, {_pid3, _}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {AnotherTestServer, %{key: "key3"}}
+                 {AnotherTestServer, key: "key3", initial_state: %{}}
                )
 
       # Fourth should fail on global limit (disable remote placement for this test)
       assert {:error, {:capacity_limit, :max_children_total}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {AnotherTestServer, %{key: "key4"}},
+                 {AnotherTestServer, key: "key4", initial_state: %{}},
                  max_placement_retries: 0
                )
     end
@@ -167,20 +167,20 @@ defmodule DurableServer.WatermarkTest do
       assert {:ok, {pid1, _}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key1"}}
+                 {WatermarkTestServer, key: "key1", initial_state: %{}}
                )
 
       assert {:ok, {_pid2, _}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key2"}}
+                 {WatermarkTestServer, key: "key2", initial_state: %{}}
                )
 
       # Third fails (disable remote placement for this test)
       assert {:error, {:capacity_limit, :max_children_total}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key3"}},
+                 {WatermarkTestServer, key: "key3", initial_state: %{}},
                  max_placement_retries: 0
                )
 
@@ -193,7 +193,7 @@ defmodule DurableServer.WatermarkTest do
       assert {:ok, {_pid3, _}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key3"}}
+                 {WatermarkTestServer, key: "key3", initial_state: %{}}
                )
     end
   end
@@ -218,7 +218,7 @@ defmodule DurableServer.WatermarkTest do
       result =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {WatermarkTestServer, %{key: "key1"}},
+          {WatermarkTestServer, key: "key1", initial_state: %{}},
           max_placement_retries: 0
         )
 
@@ -244,7 +244,7 @@ defmodule DurableServer.WatermarkTest do
       result =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {WatermarkTestServer, %{key: "key1"}},
+          {WatermarkTestServer, key: "key1", initial_state: %{}},
           max_placement_retries: 0
         )
 
@@ -275,7 +275,7 @@ defmodule DurableServer.WatermarkTest do
       assert {:error, {:capacity_limit, :no_available_nodes}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {WatermarkTestServer, %{key: "key1"}},
+                 {WatermarkTestServer, key: "key1", initial_state: %{}},
                  placement_timeout: 0
                )
     end
@@ -474,7 +474,7 @@ defmodule DurableServer.WatermarkTest do
       {:ok, {_pid, _}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {WatermarkTestServer, %{key: "key1"}}
+          {WatermarkTestServer, key: "key1", initial_state: %{}}
         )
 
       # Check should now fail
@@ -498,7 +498,7 @@ defmodule DurableServer.WatermarkTest do
       {:ok, {_pid, _}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {WatermarkTestServer, %{key: "key1"}}
+          {WatermarkTestServer, key: "key1", initial_state: %{}}
         )
 
       # Check should now fail

@@ -76,7 +76,7 @@ defmodule DurableServer do
       # Start individual servers through the supervisor
       {:ok, {pid, _meta}} = DurableServer.Supervisor.start_child(
         MyDurableSup,
-        {MyCounterServer, %{key: "user_123", count: 0}}
+        {MyCounterServer, key: "user_123", initial_state: %{count: 0}}
       )
 
       # Use the server
@@ -155,6 +155,7 @@ defmodule DurableServer do
 
   The following keys are always present in the info map:
 
+  - `:key` - DurableServer key
   - `:supervisor` - The `DurableServer.Supervisor` name
   - `:task_supervisor` - Task supervisor for spawning async tasks
   - `:dynamic_supervisor` - The DynamicSupervisor managing DurableServer processes
@@ -165,9 +166,9 @@ defmodule DurableServer do
 
       # In your supervision tree
       {DurableServer.Supervisor,
-        name: MyApp.DurableSup,
-        prefix: "myapp/",
-        init_info: %{api_client: MyApp.APIClient, config: %{timeout: 5000}}}
+       name: MyApp.DurableSup,
+       prefix: "myapp/",
+       init_info: %{api_client: MyApp.APIClient, config: %{timeout: 5000}}}
 
   Then access it in your server's `init/2`:
 
@@ -301,14 +302,14 @@ defmodule DurableServer do
   Control remote placement behavior per start_child call:
 
       # Default: Try local, then up to 3 remote nodes
-      DurableServer.Supervisor.start_child(sup, {MyServer, %{key: "user_1"}})
+      DurableServer.Supervisor.start_child(sup, {MyServer, key: "user_1", initial_state: %{}})
 
       # Local only, no remote fallback
-      DurableServer.Supervisor.start_child(sup, {MyServer, %{key: "user_1"}},
+      DurableServer.Supervisor.start_child(sup, {MyServer, key: "user_1", initial_state: %{}},
         max_placement_retries: 0)
 
       # Try local, then up to 5 remote nodes
-      DurableServer.Supervisor.start_child(sup, {MyServer, %{key: "user_1"}},
+      DurableServer.Supervisor.start_child(sup, {MyServer, key: "user_1", initial_state: %{}},
         max_placement_retries: 5)
 
   **Note:** Automatic restarts from `LifecycleManager` always use `max_placement_retries: 0`
@@ -447,65 +448,6 @@ defmodule DurableServer do
   Other environment variable levels cannot be added retroactively since their values were
   determined when the server originally started.
 
-  ### Use with Litestream
-
-  Sticky placement works exceptionally well with Litestream-backed databases:
-
-      defmodule MyDatabaseServer do
-        use DurableServer, vsn: 1
-
-        def init(%{key: key, owner_ref: old_owner_ref} = state) do
-          # Pass the old owner_ref from stored state (nil on first start)
-          # Litestream uses this to detect if the on-disk database is stale
-          # and returns a NEW owner_ref that we must store in state
-          {:ok, %{litestream_pid: litestream_pid, repo_pid: repo_pid, owner_ref: new_owner_ref}} =
-            Litestream.start_db(
-              MyApp.LitestreamSup,
-              key,
-              repo: MyApp.Repo,
-              owner_ref: old_owner_ref,
-              object_store: DurableServer.ObjectStore.new()
-            )
-
-          {:ok, Map.merge(state, %{
-            repo_pid: repo_pid,
-            litestream_pid: litestream_pid,
-            owner_ref: new_owner_ref  # Store the new owner_ref
-          })}
-        end
-
-        def dump_state(state) do
-          Map.take(state, [:key, :owner_ref])
-        end
-
-        def load_state(_vsn, dumped_state) do
-          # owner_ref defaults to nil on first start
-          Map.put_new(dumped_state, :owner_ref, nil)
-        end
-      end
-
-      # Configure supervisor with machine-level stickiness
-      {DurableServer.Supervisor,
-       name: MyDurableSup,
-       prefix: "durable/",
-       sticky_placement: %{
-         MyDatabaseServer => [
-           FLY_MACHINE_ID: 20_000,
-           FLY_REGION: 0
-         ]
-       }}
-
-  With this setup:
-  - The owner_ref persists in object storage and is used to detect stale on-disk databases
-  - Same machine tries to restart first (immediate)
-    - On-disk DB owner matches old owner_ref - reuse local database (no S3 restore)
-    - Litestream generates new owner_ref, updates owner file, returns to caller
-  - After 20s, any machine in same region can restart
-    - On-disk DB owner doesn't match (or missing) - restore from S3
-    - Litestream generates new owner_ref, writes owner file, returns to caller
-  - Without `:any`, machines outside the region can never claim (strict region pinning)
-  - A new owner_ref is generated on every start to detect future staleness
-
   ### Important Notes
 
   - Environment variable values are captured when the server first starts
@@ -629,6 +571,7 @@ defmodule DurableServer do
 
   The `info` map in `init/2` contains:
 
+  - `:key` - The DurableServer key
   - `:supervisor` - The supervisor name (e.g., `MyApp.DurableSup`)
   - `:task_supervisor` - The task supervisor for async operations
   - `:dynamic_supervisor` - The dynamic supervisor managing DurableServer processes
@@ -650,14 +593,14 @@ defmodule DurableServer do
   ## Examples
 
       # Simple init/1
-      def init(%{key: key} = state) do
+      def init(state) do
         {:ok, state, permanent: true}
       end
 
       # init/2 with runtime info
-      def init(%{key: key} = state, info) do
+      def init(state, info) do
         # Access built-in values
-        task_sup = info.task_supervisor
+        %{key: key, task_supervisor: task_sup} = info
 
         # Access user-defined values from supervisor's init_info
         api_client = info.api_client
@@ -846,7 +789,7 @@ defmodule DurableServer do
             prefix: nil,
             etag: nil,
             pid: nil,
-            restart_boot: false,
+            preloaded_boot: false,
             bootstrapped: false,
             init_from_ref: nil,
             init_from_pid: nil,
@@ -989,6 +932,7 @@ defmodule DurableServer do
           module: _module,
           init_from: _init_from,
           init_arg: _init_arg,
+          boot_info: _boot_info,
           supervisor_name: _supervisor_name,
           config: _config
         } = info
@@ -1000,7 +944,8 @@ defmodule DurableServer do
   def init(%{
         module: module,
         init_from: init_from,
-        init_arg: init_state,
+        init_arg: init_arg,
+        boot_info: boot_info,
         supervisor_name: supervisor_name,
         config: config
       })
@@ -1018,20 +963,16 @@ defmodule DurableServer do
     # upgrades to the callback module (e.g., MyApp.OrgTracker) wouldn't be detected
     Process.put(:"$initial_call", {module, :init, 1})
 
-    {key, is_sticky_local} =
-      case init_state do
-        %{key: key} ->
-          {key, _is_sticky_local = false}
+    key = Keyword.fetch!(init_arg, :key)
 
-        {:restart, %{key: key, is_sticky_local: is_sticky_local}} ->
-          {key, is_sticky_local}
-
-        {:restart, %{key: key}} ->
-          {key, _is_sticky_local = false}
+    # Sticky preloaded boots bypass disk checks because their data is already on this node.
+    is_sticky_local =
+      case boot_info do
+        %{preloaded: %{body: %StoredState{}, etag: _etag}, is_sticky_local: is_sticky_local} ->
+          is_sticky_local
 
         _ ->
-          raise ArgumentError,
-                "start_link expects a map with :key field, got: #{inspect(init_state)}"
+          false
       end
 
     # check capacity limits before attempting lock acquisition
@@ -1049,7 +990,7 @@ defmodule DurableServer do
       circuit_breaker: circuit_breaker,
       node_str: to_string(Node.self()),
       pid: self(),
-      restart_boot: match?({:restart, _}, init_state),
+      preloaded_boot: preloaded_boot?(boot_info),
       node_ref: DurableServer.Supervisor.node_ref(supervisor_name),
       init_from_ref: from_ref,
       init_from_pid: from_pid,
@@ -1059,7 +1000,8 @@ defmodule DurableServer do
 
     bootstrap = %{
       init_from: init_from,
-      init_arg: init_state,
+      init_arg: init_arg,
+      boot_info: boot_info,
       config: config,
       capacity_opts: capacity_opts
     }
@@ -1133,30 +1075,59 @@ defmodule DurableServer do
     end
   end
 
-  # fetch existing raw object + metadata
-  # or re-use already fetch data from init_state (such as LifecycleManager restarts)
+  # fetch existing raw object + metadata, or reuse preloaded boot data.
   defp fetch_existing_state_raw(
          %StorageBackend{} = store,
          %{key: key, prefix: prefix},
-         init_state,
+         boot_info,
          opts
        ) do
-    case init_state do
-      {:restart, %{body: %StoredState{} = stored_state, etag: etag}} ->
-        {:ok,
-         attach_stored_state_context(%{stored_state | etag: etag}, %{key: key, prefix: prefix})}
+    if Keyword.get(opts, :consistent, false) do
+      case fetch_stored_state(store, %{key: key, prefix: prefix}, opts) do
+        {:ok, %StoredState{} = existing_raw_data} -> {:ok, existing_raw_data}
+        {:error, _reason} -> :error
+      end
+    else
+      case boot_info_preloaded_object(boot_info) do
+        %{body: %StoredState{} = stored_state, etag: etag} ->
+          {:ok,
+           attach_stored_state_context(%{stored_state | etag: etag}, %{
+             key: key,
+             prefix: prefix
+           })}
 
-      _ ->
-        case fetch_stored_state(store, %{key: key, prefix: prefix}, opts) do
-          {:ok, %StoredState{} = existing_raw_data} -> {:ok, existing_raw_data}
-          {:error, _reason} -> :error
-        end
+        _ ->
+          case fetch_stored_state(store, %{key: key, prefix: prefix}, opts) do
+            {:ok, %StoredState{} = existing_raw_data} -> {:ok, existing_raw_data}
+            {:error, _reason} -> :error
+          end
+      end
     end
   end
 
-  defp load_fresh_init_state(module, init_state, object_store) do
+  defp preloaded_boot?(nil), do: false
+
+  defp preloaded_boot?(%{} = boot_info),
+    do: match?(%{body: %StoredState{}, etag: _etag}, boot_info_preloaded_object(boot_info))
+
+  defp boot_info_preloaded_object(nil), do: nil
+  defp boot_info_preloaded_object(%{} = boot_info) when map_size(boot_info) == 0, do: nil
+
+  defp boot_info_preloaded_object(
+         %{
+           preloaded: %{body: %StoredState{}, etag: _etag} = preloaded,
+           is_sticky_local: is_sticky_local
+         } = boot_info
+       )
+       when is_boolean(is_sticky_local) and map_size(boot_info) == 2 and
+              map_size(preloaded) == 2,
+       do: preloaded
+
+  defp load_fresh_init_state(module, init_arg, object_store) do
+    initial_state = Keyword.fetch!(init_arg, :initial_state)
+
     with dumped_init_state <-
-           init_state
+           initial_state
            |> module.dump_state()
            |> validate_dumped_state!(module),
          {:ok, encoded_init_state} <-
@@ -1196,7 +1167,7 @@ defmodule DurableServer do
          supervisor_name: supervisor_name,
          circuit_breake: circuit_breaker,
          init_from: init_from,
-         restart_boot: restart_boot,
+         preloaded_boot: preloaded_boot,
          sticky_placement_history_limit: history_limit
        }) do
     {init_from_ref, init_from_pid, init_reply_to} = normalize_init_from(init_from)
@@ -1216,7 +1187,7 @@ defmodule DurableServer do
       key: key,
       # original unprefixed key passed by user, used for group registry
       prefix: prefix,
-      restart_boot: restart_boot,
+      preloaded_boot: preloaded_boot,
       vsn: config.vsn,
       etag: etag,
       old_vsn: old_vsn,
@@ -1724,7 +1695,7 @@ defmodule DurableServer do
            key: key,
            prefix: prefix,
            circuit_breaker: circuit_breaker,
-           restart_boot: restart_boot,
+           preloaded_boot: preloaded_boot,
            init_from_ref: from_ref,
            init_from_pid: from_pid,
            init_reply_to: reply_to,
@@ -1732,12 +1703,13 @@ defmodule DurableServer do
          } = state,
          %{
            init_from: init_from,
-           init_arg: init_state,
+           init_arg: init_arg,
+           boot_info: boot_info,
            config: config,
            capacity_opts: capacity_opts
          }
        ) do
-    with :ok <- maybe_check_global_lock_circuit_breaker(circuit_breaker, restart_boot),
+    with :ok <- maybe_check_global_lock_circuit_breaker(circuit_breaker, preloaded_boot),
          :ok <- LifecycleManager.check_capacity(supervisor_name, module, capacity_opts) do
       current_node_str = to_string(Node.self())
 
@@ -1745,13 +1717,13 @@ defmodule DurableServer do
         case fetch_existing_state_raw(
                object_store,
                %{key: key, prefix: prefix},
-               init_state,
+               boot_info,
                consistent: false
              ) do
           {:ok, %StoredState{} = existing} ->
             %{meta: %Meta{} = meta} = existing
 
-            case active_restart_claim(meta, restart_boot, current_node_str) do
+            case active_restart_claim(meta, preloaded_boot, current_node_str) do
               {:claimed, claimant_node} ->
                 {:error, {:restart_claimed, claimant_node}}
 
@@ -1761,31 +1733,36 @@ defmodule DurableServer do
                     {:error, {:already_started, lock_pid}}
 
                   :expired ->
-                    case reread_expired_state(object_store, %{key: key, prefix: prefix}) do
-                      {:ok,
-                       %StoredState{
-                         meta: %Meta{} = current_meta,
-                         vsn: current_vsn,
-                         state: current_raw_state,
-                         etag: current_etag
-                       }} ->
-                        loaded_state = load_user_state(module, current_vsn, current_raw_state)
-                        {:ok, {loaded_state, current_vsn, current_etag, current_meta}}
+                    if preloaded_boot do
+                      loaded_state = load_user_state(module, existing.vsn, existing.state)
+                      {:ok, {loaded_state, existing.vsn, existing.etag, meta}}
+                    else
+                      case reread_expired_state(object_store, %{key: key, prefix: prefix}) do
+                        {:ok,
+                         %StoredState{
+                           meta: %Meta{} = current_meta,
+                           vsn: current_vsn,
+                           state: current_raw_state,
+                           etag: current_etag
+                         }} ->
+                          loaded_state = load_user_state(module, current_vsn, current_raw_state)
+                          {:ok, {loaded_state, current_vsn, current_etag, current_meta}}
 
-                      {:error, {:already_started, lock_pid}} ->
-                        {:error, {:already_started, lock_pid}}
+                        {:error, {:already_started, lock_pid}} ->
+                          {:error, {:already_started, lock_pid}}
 
-                      :error ->
-                        load_fresh_init_state(module, init_state, object_store)
+                        :error ->
+                          load_fresh_init_state(module, init_arg, object_store)
 
-                      {:error, reason} ->
-                        {:error, reason}
+                        {:error, reason} ->
+                          {:error, reason}
+                      end
                     end
                 end
             end
 
           :error ->
-            load_fresh_init_state(module, init_state, object_store)
+            load_fresh_init_state(module, init_arg, object_store)
         end
 
       case load_result do
@@ -1818,11 +1795,12 @@ defmodule DurableServer do
                    supervisor_name: supervisor_name,
                    circuit_breake: circuit_breaker,
                    init_from: init_from,
-                   restart_boot: restart_boot,
+                   preloaded_boot: preloaded_boot,
                    sticky_placement_history_limit: sticky_placement_history_limit
                  }) do
               {:ok, %DurableServer{} = locked_state} ->
                 info = %{
+                  key: key,
                   supervisor: supervisor_name,
                   task_supervisor: DurableServer.Supervisor.get_task_supervisor(supervisor_name),
                   dynamic_supervisor:
@@ -2999,7 +2977,7 @@ defmodule DurableServer do
                key: state.key,
                prefix: state.prefix
              },
-             nil,
+             %{},
              consistent: true
            ) do
         {:ok, %StoredState{meta: %Meta{} = meta}} ->
@@ -3228,7 +3206,7 @@ defmodule DurableServer do
     end
   end
 
-  defp maybe_increment_global_lock_failures(%DurableServer{restart_boot: true}), do: :ok
+  defp maybe_increment_global_lock_failures(%DurableServer{preloaded_boot: true}), do: :ok
 
   defp maybe_increment_global_lock_failures(%DurableServer{} = state) do
     CircuitBreaker.increment_global_lock_failures(state.circuit_breaker)

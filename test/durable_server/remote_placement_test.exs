@@ -9,8 +9,8 @@ defmodule DurableServer.RemotePlacementTest do
     use DurableServer, vsn: 1
 
     @impl true
-    def init(state) do
-      {:ok, state}
+    def init(state, info) do
+      {:ok, Map.put(state, :key, info.key)}
     end
 
     @impl true
@@ -29,14 +29,14 @@ defmodule DurableServer.RemotePlacementTest do
     use DurableServer, vsn: 1
 
     @impl true
-    def init(%{singleflight_delay_ms: delay_ms} = state)
+    def init(%{singleflight_delay_ms: delay_ms} = state, info)
         when is_integer(delay_ms) and delay_ms > 0 do
       Process.sleep(delay_ms)
-      {:ok, Map.delete(state, :singleflight_delay_ms)}
+      {:ok, state |> Map.put(:key, info.key) |> Map.delete(:singleflight_delay_ms)}
     end
 
-    def init(state) do
-      {:ok, state}
+    def init(state, info) do
+      {:ok, Map.put(state, :key, info.key)}
     end
 
     @impl true
@@ -71,7 +71,7 @@ defmodule DurableServer.RemotePlacementTest do
       {:ok, {_pid, _}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "key1"}},
+          {RemotePlacementTestServer, key: "key1", initial_state: %{}},
           max_placement_retries: 0
         )
 
@@ -146,7 +146,7 @@ defmodule DurableServer.RemotePlacementTest do
       assert {:ok, {pid, _meta}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {RemotePlacementTestServer, %{key: "key1"}},
+                 {RemotePlacementTestServer, key: "key1", initial_state: %{}},
                  max_placement_retries: 3
                )
 
@@ -170,7 +170,7 @@ defmodule DurableServer.RemotePlacementTest do
       {:ok, {_pid1, _}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "key1"}},
+          {RemotePlacementTestServer, key: "key1", initial_state: %{}},
           max_placement_retries: 0
         )
 
@@ -178,7 +178,7 @@ defmodule DurableServer.RemotePlacementTest do
       assert {:error, {:capacity_limit, :max_children_total}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {RemotePlacementTestServer, %{key: "key2"}},
+                 {RemotePlacementTestServer, key: "key2", initial_state: %{}},
                  max_placement_retries: 0
                )
     end
@@ -199,7 +199,7 @@ defmodule DurableServer.RemotePlacementTest do
       {:ok, {_pid1, _}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "key1"}},
+          {RemotePlacementTestServer, key: "key1", initial_state: %{}},
           max_placement_retries: 0
         )
 
@@ -207,7 +207,7 @@ defmodule DurableServer.RemotePlacementTest do
       assert {:error, {:capacity_limit, :no_available_nodes}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {RemotePlacementTestServer, %{key: "key2"}},
+                 {RemotePlacementTestServer, key: "key2", initial_state: %{}},
                  max_placement_retries: 3,
                  placement_timeout: 0
                )
@@ -231,7 +231,7 @@ defmodule DurableServer.RemotePlacementTest do
       assert {:ok, {pid, _meta}} =
                DurableServer.Supervisor.ensure_started_child(
                  supervisor_name,
-                 {RemotePlacementTestServer, %{key: "key1"}},
+                 {RemotePlacementTestServer, key: "key1", initial_state: %{}},
                  max_placement_retries: 3
                )
 
@@ -255,7 +255,7 @@ defmodule DurableServer.RemotePlacementTest do
       {:ok, {pid1, _}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "key1"}},
+          {RemotePlacementTestServer, key: "key1", initial_state: %{}},
           max_placement_retries: 3
         )
 
@@ -263,7 +263,7 @@ defmodule DurableServer.RemotePlacementTest do
       {:ok, {pid2, _}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "key1"}},
+          {RemotePlacementTestServer, key: "key1", initial_state: %{}},
           max_placement_retries: 3
         )
 
@@ -285,7 +285,7 @@ defmodule DurableServer.RemotePlacementTest do
       key = "singleflight-#{:erlang.unique_integer([:positive])}"
 
       child_spec =
-        {EnsureSingleflightTestServer, %{key: key, singleflight_delay_ms: 120}}
+        {EnsureSingleflightTestServer, key: key, initial_state: %{singleflight_delay_ms: 120}}
 
       results =
         1..24
@@ -325,7 +325,9 @@ defmodule DurableServer.RemotePlacementTest do
       )
 
       key = "singleflight-cap-#{:erlang.unique_integer([:positive])}"
-      child_spec = {EnsureSingleflightTestServer, %{key: key, singleflight_delay_ms: 300}}
+
+      child_spec =
+        {EnsureSingleflightTestServer, key: key, initial_state: %{singleflight_delay_ms: 300}}
 
       results =
         1..24
@@ -584,7 +586,7 @@ defmodule DurableServer.RemotePlacementTest do
       assert {:ok, {pid, _meta}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {RemotePlacementTestServer, %{key: "local_only_ok"}},
+                 {RemotePlacementTestServer, key: "local_only_ok", initial_state: %{}},
                  local_only: true
                )
 
@@ -608,7 +610,7 @@ defmodule DurableServer.RemotePlacementTest do
       {:ok, {_pid, _}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "local_fill"}},
+          {RemotePlacementTestServer, key: "local_fill", initial_state: %{}},
           local_only: true
         )
 
@@ -616,7 +618,7 @@ defmodule DurableServer.RemotePlacementTest do
       assert {:error, {:capacity_limit, :max_children_total}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {RemotePlacementTestServer, %{key: "local_only_fail"}},
+                 {RemotePlacementTestServer, key: "local_only_fail", initial_state: %{}},
                  local_only: true
                )
     end
@@ -638,7 +640,7 @@ defmodule DurableServer.RemotePlacementTest do
       assert {:ok, {pid, _meta}} =
                DurableServer.Supervisor.ensure_started_child(
                  supervisor_name,
-                 {RemotePlacementTestServer, %{key: "ensure_local_ok"}},
+                 {RemotePlacementTestServer, key: "ensure_local_ok", initial_state: %{}},
                  local_only: true
                )
 
@@ -658,14 +660,14 @@ defmodule DurableServer.RemotePlacementTest do
       {:ok, {pid1, _}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "ensure_local_existing"}},
+          {RemotePlacementTestServer, key: "ensure_local_existing", initial_state: %{}},
           local_only: true
         )
 
       {:ok, {pid2, _}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "ensure_local_existing"}},
+          {RemotePlacementTestServer, key: "ensure_local_existing", initial_state: %{}},
           local_only: true
         )
 
@@ -688,7 +690,7 @@ defmodule DurableServer.RemotePlacementTest do
       {:ok, {_pid, _}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {RemotePlacementTestServer, %{key: "ensure_fill"}},
+          {RemotePlacementTestServer, key: "ensure_fill", initial_state: %{}},
           local_only: true
         )
 
@@ -696,7 +698,7 @@ defmodule DurableServer.RemotePlacementTest do
       assert {:error, {:capacity_limit, _reason}} =
                DurableServer.Supervisor.ensure_started_child(
                  supervisor_name,
-                 {RemotePlacementTestServer, %{key: "ensure_local_fail"}},
+                 {RemotePlacementTestServer, key: "ensure_local_fail", initial_state: %{}},
                  local_only: true
                )
     end

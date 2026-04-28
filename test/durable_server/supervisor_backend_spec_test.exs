@@ -226,9 +226,7 @@ defmodule DurableServer.SupervisorBackendSpecTest do
     true = Process.register(pid, supervisor_name)
 
     on_exit(fn ->
-      if Process.alive?(pid) do
-        Process.exit(pid, :kill)
-      end
+      Process.exit(pid, :kill)
     end)
 
     refute DurableServer.Supervisor.ready?(supervisor_name)

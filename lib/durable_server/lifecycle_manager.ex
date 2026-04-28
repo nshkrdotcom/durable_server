@@ -2483,13 +2483,13 @@ defmodule DurableServer.LifecycleManager do
     }
   end
 
-  defp try_restart_child(%LifecycleManager{} = state, {module, init_arg}) do
+  defp try_restart_child(%LifecycleManager{} = state, {module, init_arg}, preloaded) do
     if Code.ensure_loaded?(module) do
       # note: we must pass max_placement_retries: 0 to prevent remote placement
       # because lifecycle manager is only concered with its own local node
-      DurableServer.Supervisor.start_child(
+      DurableServer.Supervisor.__start_child__(
         state.supervisor_name,
-        {module, init_arg},
+        {module, init_arg, %{preloaded: preloaded, is_sticky_local: false}},
         max_placement_retries: 0,
         timeout: state.restart_start_timeout_ms
       )
@@ -2519,7 +2519,8 @@ defmodule DurableServer.LifecycleManager do
         start_result =
           try_restart_child(
             state,
-            {module, {:restart, %{key: meta.key, body: body, etag: etag}}}
+            {module, [key: meta.key, initial_state: %{}]},
+            %{body: body, etag: etag}
           )
 
         report_diagnostic(state.supervisor_name, restart_start_diag_key(start_result))

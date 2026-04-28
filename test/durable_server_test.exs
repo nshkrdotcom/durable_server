@@ -29,6 +29,15 @@ defmodule DurableServerTest do
 
   def atomify_keys(other), do: other
 
+  defp preloaded_child_spec(module, init_arg, preloaded),
+    do: {module, init_arg, %{preloaded: preloaded, is_sticky_local: false}}
+
+  defp refute_process_down(pid, timeout \\ 0) when is_pid(pid) do
+    ref = Process.monitor(pid)
+    refute_receive {:DOWN, ^ref, :process, ^pid, _reason}, timeout
+    Process.demonitor(ref, [:flush])
+  end
+
   defp start_test_supervisor(extra_opts \\ []) do
     unique_id = "#{System.system_time(:microsecond)}_#{DurableServer.UUID.uuid4()}"
     supervisor_name = :"test_supervisor_#{unique_id}"
@@ -301,15 +310,15 @@ defmodule DurableServerTest do
       |> Map.put_new(:count, 0)
     end
 
-    def init(%{error: reason}) do
+    def init(%{error: reason}, _info) do
       {:error, reason}
     end
 
-    def init(%{ignore: true}) do
+    def init(%{ignore: true}, _info) do
       :ignore
     end
 
-    def init(init_state) do
+    def init(init_state, _info) do
       if sleep_ms = init_state[:init_sleep_ms] do
         Process.sleep(sleep_ms)
       end
@@ -437,7 +446,7 @@ defmodule DurableServerTest do
     end
 
     def terminate(_reason, state) do
-      if state[:test_pid] && Process.alive?(state[:test_pid]) do
+      if is_pid(state[:test_pid]) do
         send(state[:test_pid], :terminate_called)
       end
 
@@ -464,10 +473,10 @@ defmodule DurableServerTest do
       DurableServerTest.atomify_keys(persisted_state)
     end
 
-    def init(%{key: key}, info) do
+    def init(_state, info) do
       # assert that we have a task sup in the info map
       _ = info.task_supervisor
-      {:ok, %{key: key, count: 0}, auto_sync: true}
+      {:ok, %{key: info.key, count: 0}, auto_sync: true}
     end
 
     def handle_call(:increment, _from, %{count: count} = state) do
@@ -487,7 +496,8 @@ defmodule DurableServerTest do
       Map.put_new(state, :count, 0)
     end
 
-    def init(%{sync_ms: sync_ms} = init_state) do
+    def init(%{sync_ms: sync_ms} = init_state, info) do
+      init_state = Map.put(init_state, :key, info.key)
       {:ok, init_state, auto_sync: false, sync_every_ms: sync_ms}
     end
 
@@ -506,13 +516,27 @@ defmodule DurableServerTest do
       DurableServerTest.atomify_keys(persisted_state)
     end
 
-    def init(%{key: key}, info) do
+    def init(_state, info) do
       # Store the info map in state so tests can verify it
-      {:ok, %{key: key, info: info}}
+      {:ok, %{key: info.key, info: info}}
     end
 
     def handle_call(:get_info, _from, state) do
       {:reply, state.info, state}
+    end
+  end
+
+  defmodule KeyInfoServer do
+    use DurableServer, vsn: 1
+
+    def dump_state(state), do: Map.take(state, [:count])
+
+    def load_state(_old_vsn, persisted_state) do
+      DurableServerTest.atomify_keys(persisted_state)
+    end
+
+    def init(state, info) do
+      {:ok, Map.put(state, :key_from_info, info.key)}
     end
   end
 
@@ -528,8 +552,8 @@ defmodule DurableServerTest do
       |> Map.put(:test_pid, nil)
     end
 
-    def init(%{key: key} = init_state) do
-      {:ok, %{key: key, count: 0, test_pid: Map.get(init_state, :test_pid)}}
+    def init(init_state, info) do
+      {:ok, %{key: info.key, count: 0, test_pid: Map.get(init_state, :test_pid)}}
     end
 
     def handle_call({:set_test_pid, test_pid}, _from, state) do
@@ -600,9 +624,60 @@ defmodule DurableServerTest do
       key = "test-server-#{DurableServer.UUID.uuid4()}"
 
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
-      assert Process.alive?(pid)
+      refute_process_down(pid)
+    end
+
+    test "starts from child-spec keyword args without persisting key in user state", %{
+      supervisor_name: supervisor_name,
+      prefix: prefix
+    } do
+      key = "new-api-test-#{DurableServer.UUID.uuid4()}"
+
+      {:ok, {pid, _meta}} =
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{count: 4}}
+        )
+
+      assert GenServer.call(pid, :get_count) == 4
+
+      %{storage_backend: store} = DurableServer.Supervisor.__get_config__(supervisor_name)
+
+      {:ok, %StoredState{} = stored_state} =
+        DurableServer.fetch_stored_state(store, %{key: key, prefix: prefix})
+
+      refute Map.has_key?(stored_state.state, "key")
+      refute Map.has_key?(stored_state.state, :key)
+      assert stored_state.state["count"] == 4
+    end
+
+    test "passes durable key to init/2 info for keyword child specs", %{
+      supervisor_name: supervisor_name,
+      prefix: prefix
+    } do
+      key = "init-info-key-test-#{DurableServer.UUID.uuid4()}"
+
+      {:ok, {pid, _meta}} =
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {KeyInfoServer, key: key, initial_state: %{count: 8}}
+        )
+
+      refute_process_down(pid)
+
+      %{storage_backend: store} = DurableServer.Supervisor.__get_config__(supervisor_name)
+
+      {:ok, %StoredState{} = stored_state} =
+        DurableServer.fetch_stored_state(store, %{key: key, prefix: prefix})
+
+      assert stored_state.state["count"] == 8
+      refute Map.has_key?(stored_state.state, "key_from_info")
+      refute Map.has_key?(stored_state.state, "key")
     end
 
     test "handles ignore return from user init", %{
@@ -613,7 +688,7 @@ defmodule DurableServerTest do
       result =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: "123", ignore: true}}
+          {TestServer, key: "123", initial_state: %{ignore: true}}
         )
 
       # When init returns :ignore, start_child should return error or specific result
@@ -634,10 +709,29 @@ defmodule DurableServerTest do
     } do
       # Missing key should cause start_child to fail with ArgumentError
 
-      assert_raise ArgumentError, ~r/expects a map with :key field/, fn ->
+      assert_raise ArgumentError, ~r/start_child requires :key/, fn ->
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{custom_opts: %{}}}
+          {TestServer, initial_state: %{custom_opts: %{}}}
+        )
+      end
+    end
+
+    test "validates child args require map :initial_state", %{
+      supervisor_name: supervisor_name,
+      prefix: _prefix
+    } do
+      assert_raise ArgumentError, ~r/start_child requires :initial_state/, fn ->
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: "missing-initial-state"}
+        )
+      end
+
+      assert_raise ArgumentError, ~r/start_child :initial_state must be a map/, fn ->
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: "bad-initial-state", initial_state: [count: 0]}
         )
       end
     end
@@ -650,7 +744,7 @@ defmodule DurableServerTest do
       {:error, {%ArgumentError{message: message}, _}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: "test", invalid_options_test: true}}
+          {TestServer, key: "test", initial_state: %{invalid_options_test: true}}
         )
 
       assert message =~ "unknown keys [:invalid_opt]"
@@ -670,7 +764,7 @@ defmodule DurableServerTest do
           assert {:error, :startup_sync_rejected} =
                    DurableServer.Supervisor.start_child(
                      supervisor_name,
-                     {TestServer, %{key: key}}
+                     {TestServer, key: key, initial_state: %{}}
                    )
         end)
 
@@ -689,7 +783,7 @@ defmodule DurableServerTest do
       assert {:error, :startup_sync_rejected} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {TestServer, %{key: key, custom_opts: %{permanent: true}}}
+                 {TestServer, key: key, initial_state: %{custom_opts: %{permanent: true}}}
                )
 
       %{storage_backend: store} = DurableServer.Supervisor.__get_config__(supervisor_name)
@@ -708,7 +802,10 @@ defmodule DurableServerTest do
       key = "test-server-#{DurableServer.UUID.uuid4()}"
 
       {:ok, {_pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       assert is_integer(DurableServer.Supervisor.node_ref(supervisor_name))
     end
@@ -724,20 +821,20 @@ defmodule DurableServerTest do
       {:ok, {pid1, ^initial_meta}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {TestServer, %{key: key, meta: initial_meta}}
+          {TestServer, key: key, initial_state: %{meta: initial_meta}}
         )
 
-      assert Process.alive?(pid1)
+      refute_process_down(pid1)
 
       # Second call should return the same process
       {:ok, {pid2, ^initial_meta}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {TestServer, %{key: key, meta: initial_meta}}
+          {TestServer, key: key, initial_state: %{meta: initial_meta}}
         )
 
       assert pid1 == pid2
-      assert Process.alive?(pid2)
+      refute_process_down(pid2)
 
       # Verify it's the same process in the registry
       {^pid1, ^initial_meta} = DurableServer.Supervisor.lookup(supervisor_name, key)
@@ -753,7 +850,7 @@ defmodule DurableServerTest do
       assert {:error, :not_found} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {TestServer, %{key: key}},
+                 {TestServer, key: key, initial_state: %{}},
                  existing: true
                )
     end
@@ -765,7 +862,10 @@ defmodule DurableServerTest do
 
       # Start, sync, and stop to create valid persisted state
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       GenServer.call(pid, :increment_and_sync)
       ref = Process.monitor(pid)
@@ -776,11 +876,11 @@ defmodule DurableServerTest do
       assert {:ok, {pid2, _meta}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {TestServer, %{key: key}},
+                 {TestServer, key: key, initial_state: %{}},
                  existing: true
                )
 
-      assert Process.alive?(pid2)
+      refute_process_down(pid2)
       assert pid2 != pid
     end
 
@@ -792,7 +892,7 @@ defmodule DurableServerTest do
       assert {:error, :not_found} =
                DurableServer.Supervisor.ensure_started_child(
                  supervisor_name,
-                 {TestServer, %{key: key}},
+                 {TestServer, key: key, initial_state: %{}},
                  existing: true
                )
     end
@@ -804,7 +904,10 @@ defmodule DurableServerTest do
 
       # Start, sync, and stop to create valid persisted state
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       GenServer.call(pid, :increment_and_sync)
       ref = Process.monitor(pid)
@@ -815,15 +918,15 @@ defmodule DurableServerTest do
       assert {:ok, {pid2, _meta}} =
                DurableServer.Supervisor.ensure_started_child(
                  supervisor_name,
-                 {TestServer, %{key: key}},
+                 {TestServer, key: key, initial_state: %{}},
                  existing: true
                )
 
-      assert Process.alive?(pid2)
+      refute_process_down(pid2)
       assert pid2 != pid
     end
 
-    test "ensure_started_child accepts internal restart init arg shape", %{
+    test "__start_child__ accepts internal preloaded boot info", %{
       supervisor_name: supervisor_name,
       prefix: prefix
     } do
@@ -831,7 +934,10 @@ defmodule DurableServerTest do
       %{storage_backend: backend} = DurableServer.Supervisor.__get_config__(supervisor_name)
 
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       GenServer.call(pid, :increment_and_sync)
       ref = Process.monitor(pid)
@@ -842,14 +948,28 @@ defmodule DurableServerTest do
         DurableServer.fetch_stored_state(backend, %{key: key, prefix: prefix})
 
       assert {:ok, {pid2, _meta}} =
-               DurableServer.Supervisor.ensure_started_child(
+               DurableServer.Supervisor.__start_child__(
                  supervisor_name,
-                 {TestServer, {:restart, %{key: key, body: body, etag: etag}}},
+                 preloaded_child_spec(TestServer, [key: key, initial_state: %{}], %{
+                   body: body,
+                   etag: etag
+                 }),
                  local_only: true
                )
 
-      assert Process.alive?(pid2)
+      refute_process_down(pid2)
       assert pid2 != pid
+    end
+
+    test "start_child rejects internal boot info child specs", %{
+      supervisor_name: supervisor_name
+    } do
+      assert_raise ArgumentError, ~r/start_child expects/, fn ->
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, [key: "private-shape", initial_state: %{}], %{}}
+        )
+      end
     end
 
     test "ensure_started_child returns already-running process even without persisted state", %{
@@ -861,7 +981,7 @@ defmodule DurableServerTest do
       {:ok, {pid1, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: key}}
+          {TestServer, key: key, initial_state: %{}}
         )
 
       # ensure_started_child with existing: true should find it via lookup
@@ -869,7 +989,7 @@ defmodule DurableServerTest do
       {:ok, {pid2, _meta}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {TestServer, %{key: key}},
+          {TestServer, key: key, initial_state: %{}},
           existing: true
         )
 
@@ -884,7 +1004,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {InitInfoServer, %{key: key}}
+          {InitInfoServer, key: key, initial_state: %{}}
         )
 
       info = GenServer.call(pid, :get_info)
@@ -915,7 +1035,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {InitInfoServer, %{key: key}}
+          {InitInfoServer, key: key, initial_state: %{}}
         )
 
       info = GenServer.call(pid, :get_info)
@@ -938,7 +1058,10 @@ defmodule DurableServerTest do
       key = "basic-server-#{DurableServer.UUID.uuid4()}"
 
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       :ok = GenServer.call(pid, {:set_test_pid, self()})
       %{pid: pid}
@@ -977,8 +1100,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1012,7 +1135,7 @@ defmodule DurableServerTest do
       {:ok, {pid, ^initial_meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: key, meta: initial_meta}}
+          {TestServer, key: key, initial_state: %{meta: initial_meta}}
         )
 
       # Verify initial metadata is set in group registry
@@ -1057,7 +1180,7 @@ defmodule DurableServerTest do
       {:ok, {pid, ^initial_meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: key, meta: initial_meta}}
+          {TestServer, key: key, initial_state: %{meta: initial_meta}}
         )
 
       # Test combining :sync action with :meta option
@@ -1114,7 +1237,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: key}}
+          {TestServer, key: key, initial_state: %{}}
         )
 
       # Test that invalid meta types cause the GenServer call to exit with FunctionClauseError
@@ -1148,8 +1271,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1179,7 +1302,10 @@ defmodule DurableServerTest do
       key = "test-server-#{DurableServer.UUID.uuid4()}"
 
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       %{pid: pid, key: key}
     end
@@ -1225,7 +1351,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {AfterTerminateTestServer, %{key: key}}
+          {AfterTerminateTestServer, key: key, initial_state: %{}}
         )
 
       :ok = GenServer.call(pid, {:set_test_pid, self()})
@@ -1263,7 +1389,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {AfterTerminateTestServer, %{key: key}}
+          {AfterTerminateTestServer, key: key, initial_state: %{}}
         )
 
       :ok = GenServer.call(pid, {:set_test_pid, self()})
@@ -1282,7 +1408,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {AutoSyncServer, %{key: key}}
+          {AutoSyncServer, key: key, initial_state: %{}}
         )
 
       # Increment should trigger auto sync
@@ -1312,8 +1438,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1344,7 +1470,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {PeriodicSyncServer, %{key: key, sync_ms: sync_ms}}
+          {PeriodicSyncServer, key: key, initial_state: %{sync_ms: sync_ms}}
         )
 
       # Increment without explicit sync
@@ -1370,11 +1496,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestTemporalServer,
-           %{
-             key: key,
-             occurred_at: occurred_at,
-             nested: %{occurred_at: occurred_at}
-           }}
+           key: key,
+           initial_state: %{occurred_at: occurred_at, nested: %{occurred_at: occurred_at}}}
         )
 
       assert :json_string == GenServer.call(pid, :get_loaded_shape)
@@ -1396,8 +1519,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1419,8 +1542,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key2,
+           key: key2,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1438,8 +1561,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1476,11 +1599,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestTemporalServer,
-           %{
-             key: key,
-             occurred_at: occurred_at,
-             nested: %{occurred_at: occurred_at}
-           }}
+           key: key,
+           initial_state: %{occurred_at: occurred_at, nested: %{occurred_at: occurred_at}}}
         )
 
       assert :ok = GenServer.call(pid, :sync_now)
@@ -1492,7 +1612,7 @@ defmodule DurableServerTest do
       {:ok, {restarted_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestTemporalServer, %{key: key}},
+          {TestTemporalServer, key: key, initial_state: %{}},
           existing: true
         )
 
@@ -1555,8 +1675,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: true
              }
@@ -1596,8 +1716,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1619,7 +1739,10 @@ defmodule DurableServerTest do
       key = "test-server-#{DurableServer.UUID.uuid4()}"
 
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Basic operations should work
       assert GenServer.call(pid, :increment) == 1
@@ -1636,7 +1759,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {AutoSyncServer, %{key: key}}
+          {AutoSyncServer, key: key, initial_state: %{}}
         )
 
       # Even if sync fails, server should continue
@@ -1650,7 +1773,10 @@ defmodule DurableServerTest do
       key = "test-server-#{DurableServer.UUID.uuid4()}"
 
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       %{pid: pid}
     end
@@ -1672,8 +1798,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1710,7 +1836,10 @@ defmodule DurableServerTest do
       key = "test-server-#{DurableServer.UUID.uuid4()}"
 
       {:ok, {pid, _meta}} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Perform operations that should interact with ObjectStore
       assert GenServer.call(pid, :increment_and_sync) == 1
@@ -1727,8 +1856,8 @@ defmodule DurableServerTest do
         DurableServer.Supervisor.start_child(
           supervisor_name,
           {TestServer,
-           %{
-             key: key,
+           key: key,
+           initial_state: %{
              custom_opts: %{
                auto_sync: false
              }
@@ -1753,8 +1882,7 @@ defmodule DurableServerTest do
                 },
                 state: %{
                   "count" => 1,
-                  "custom_opts" => %{"auto_sync" => false},
-                  "key" => ^key
+                  "custom_opts" => %{"auto_sync" => false}
                 },
                 vsn: 1
               }} = DurableServer.fetch_stored_state(store, %{key: key, prefix: prefix})
@@ -1771,7 +1899,7 @@ defmodule DurableServerTest do
       result =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key, error_test: "custom_error"}}
+          {EdgeCaseTestServer, key: key, initial_state: %{error_test: "custom_error"}}
         )
 
       assert {:error, {:bad_init_return, {:error, "custom_error"}}} = result
@@ -1783,7 +1911,7 @@ defmodule DurableServerTest do
       result =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key, crash_on_init: true}}
+          {EdgeCaseTestServer, key: key, initial_state: %{crash_on_init: true}}
         )
 
       assert {:error, {_, _}} = result
@@ -1798,7 +1926,7 @@ defmodule DurableServerTest do
       result =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key, invalid_return: true}}
+          {EdgeCaseTestServer, key: key, initial_state: %{invalid_return: true}}
         )
 
       assert {:error, {:bad_init_return, :invalid_return}} = result
@@ -1807,10 +1935,10 @@ defmodule DurableServerTest do
     test "handles missing required options", %{supervisor_name: supervisor_name, prefix: _prefix} do
       # Test that start_link validation catches missing key
 
-      assert_raise ArgumentError, ~r/expects a map with :key field/, fn ->
+      assert_raise ArgumentError, ~r/start_child requires :key/, fn ->
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{bad_options: true}}
+          {EdgeCaseTestServer, initial_state: %{bad_options: true}}
         )
       end
     end
@@ -1833,7 +1961,8 @@ defmodule DurableServerTest do
         Task.async(fn ->
           DurableServer.Supervisor.start_child(
             supervisor_name,
-            {DurableServerTest.BlockingInitServer, %{key: blocked_key, block_on_init: true}}
+            {DurableServerTest.BlockingInitServer,
+             key: blocked_key, initial_state: %{block_on_init: true}}
           )
         end)
 
@@ -1849,18 +1978,18 @@ defmodule DurableServerTest do
         |> MapSet.to_list()
 
       assert [blocked_pid] = blocked_children
-      assert Process.alive?(blocked_pid)
+      refute_process_down(blocked_pid)
 
       {elapsed_us, fast_result} =
         :timer.tc(fn ->
           DurableServer.Supervisor.start_child(
             supervisor_name,
-            {DurableServerTest.BlockingInitServer, %{key: fast_key}}
+            {DurableServerTest.BlockingInitServer, key: fast_key, initial_state: %{}}
           )
         end)
 
       assert {:ok, {fast_pid, _meta}} = fast_result
-      assert Process.alive?(fast_pid)
+      refute_process_down(fast_pid)
       assert div(elapsed_us, 1000) < 2_000
 
       send(blocked_pid, :continue_init)
@@ -1884,7 +2013,8 @@ defmodule DurableServerTest do
         :timer.tc(fn ->
           DurableServer.Supervisor.start_child(
             supervisor_name,
-            {DurableServerTest.BlockingInitServer, %{key: blocked_key, block_on_init: true}},
+            {DurableServerTest.BlockingInitServer,
+             key: blocked_key, initial_state: %{block_on_init: true}},
             timeout: 100
           )
         end)
@@ -1901,7 +2031,7 @@ defmodule DurableServerTest do
         |> MapSet.to_list()
 
       assert [blocked_pid] = blocked_children
-      assert Process.alive?(blocked_pid)
+      refute_process_down(blocked_pid)
 
       send(blocked_pid, :continue_init)
 
@@ -1929,7 +2059,8 @@ defmodule DurableServerTest do
         :timer.tc(fn ->
           DurableServer.Supervisor.ensure_started_child(
             supervisor_name,
-            {DurableServerTest.BlockingInitServer, %{key: blocked_key, block_on_init: true}},
+            {DurableServerTest.BlockingInitServer,
+             key: blocked_key, initial_state: %{block_on_init: true}},
             local_only: true,
             timeout: 100
           )
@@ -1947,7 +2078,7 @@ defmodule DurableServerTest do
         |> MapSet.to_list()
 
       assert [blocked_pid] = blocked_children
-      assert Process.alive?(blocked_pid)
+      refute_process_down(blocked_pid)
 
       send(blocked_pid, :continue_init)
 
@@ -1965,7 +2096,8 @@ defmodule DurableServerTest do
       blocked_key = "ensure-timeout-waiter-#{DurableServer.UUID.uuid4()}"
 
       child_spec =
-        {DurableServerTest.BlockingInitServer, %{key: blocked_key, block_on_init: true}}
+        {DurableServerTest.BlockingInitServer,
+         key: blocked_key, initial_state: %{block_on_init: true}}
 
       dynamic_supervisor = DurableServer.Supervisor.get_dynamic_supervisor(supervisor_name)
 
@@ -2000,7 +2132,7 @@ defmodule DurableServerTest do
         end)
 
       assert [blocked_pid] = blocked_children
-      assert Process.alive?(blocked_pid)
+      refute_process_down(blocked_pid)
 
       assert {:error, :timeout} =
                DurableServer.Supervisor.ensure_started_child(
@@ -2027,7 +2159,8 @@ defmodule DurableServerTest do
       blocked_key = "ensure-timeout-alias-#{DurableServer.UUID.uuid4()}"
 
       child_spec =
-        {DurableServerTest.BlockingInitServer, %{key: blocked_key, block_on_init: true}}
+        {DurableServerTest.BlockingInitServer,
+         key: blocked_key, initial_state: %{block_on_init: true}}
 
       dynamic_supervisor = DurableServer.Supervisor.get_dynamic_supervisor(supervisor_name)
 
@@ -2067,7 +2200,7 @@ defmodule DurableServerTest do
         end)
 
       assert [blocked_pid] = blocked_children
-      assert Process.alive?(blocked_pid)
+      refute_process_down(blocked_pid)
 
       parent = self()
 
@@ -2131,7 +2264,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key, count: 0}}
+          {EdgeCaseTestServer, key: key, initial_state: %{count: 0}}
         )
 
       # Increment to create some state
@@ -2157,7 +2290,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key, count: 0}}
+          {EdgeCaseTestServer, key: key, initial_state: %{count: 0}}
         )
 
       assert GenServer.call(pid, :increment) == 1
@@ -2180,7 +2313,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key, count: 0}}
+          {EdgeCaseTestServer, key: key, initial_state: %{count: 0}}
         )
 
       assert GenServer.call(pid, :increment) == 1
@@ -2203,7 +2336,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key, count: 0}}
+          {EdgeCaseTestServer, key: key, initial_state: %{count: 0}}
         )
 
       assert GenServer.call(pid, :increment) == 1
@@ -2228,7 +2361,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key, count: 0}}
+          {EdgeCaseTestServer, key: key, initial_state: %{count: 0}}
         )
 
       # This should work - status is allowed
@@ -2248,14 +2381,14 @@ defmodule DurableServerTest do
       {:ok, _pid1} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key}}
+          {EdgeCaseTestServer, key: key, initial_state: %{}}
         )
 
       # Second server with same key should fail to start due to lock
       result =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {EdgeCaseTestServer, %{key: key}}
+          {EdgeCaseTestServer, key: key, initial_state: %{}}
         )
 
       assert {:error, {:already_started, {pid, _meta}}} = result
@@ -2274,23 +2407,24 @@ defmodule DurableServerTest do
       DurableServerTest.atomify_keys(persisted_state)
     end
 
-    def init(%{error_test: reason}) do
+    def init(%{error_test: reason}, _info) do
       {:error, reason}
     end
 
-    def init(%{crash_on_init: true}) do
+    def init(%{crash_on_init: true}, _info) do
       raise "Intentional crash during init"
     end
 
-    def init(%{bad_options: true}) do
+    def init(%{bad_options: true}, _info) do
       {:ok, %{count: 0}, auto_synctypo: false}
     end
 
-    def init(%{invalid_return: true}) do
+    def init(%{invalid_return: true}, _info) do
       :invalid_return
     end
 
-    def init(state) do
+    def init(state, info) do
+      state = Map.put(state, :key, info.key)
       {:ok, state, auto_sync: false}
     end
 
@@ -2335,14 +2469,17 @@ defmodule DurableServerTest do
       DurableServerTest.atomify_keys(persisted_state)
     end
 
-    def init(%{block_on_init: true} = state) do
+    def init(%{block_on_init: true} = state, info) do
+      state = Map.put(state, :key, info.key)
+
       receive do
         :continue_init ->
           {:ok, Map.delete(state, :block_on_init), auto_sync: false}
       end
     end
 
-    def init(state) do
+    def init(state, info) do
+      state = Map.put(state, :key, info.key)
       {:ok, state, auto_sync: false}
     end
   end
@@ -2355,7 +2492,10 @@ defmodule DurableServerTest do
       key = "non-permanent-default-test-#{DurableServer.UUID.uuid4()}"
 
       {:ok, _pid} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Check metadata shows non-permanent by default (user must opt-in)
       store = test_object_store()
@@ -2376,15 +2516,15 @@ defmodule DurableServerTest do
           DurableServerTest.atomify_keys(state)
         end
 
-        def init(state) do
-          {:ok, state, permanent: true}
+        def init(state, info) do
+          {:ok, Map.put(state, :key, info.key), permanent: true}
         end
       end
 
       {:ok, _pid} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {PermanentTestServer, %{key: key}}
+          {PermanentTestServer, key: key, initial_state: %{}}
         )
 
       # Check metadata shows permanent
@@ -2487,7 +2627,10 @@ defmodule DurableServerTest do
 
       # Explicitly restart it
       {:ok, _pid} =
-        DurableServer.Supervisor.start_child(supervisor_name, {TestServer, %{key: key}})
+        DurableServer.Supervisor.start_child(
+          supervisor_name,
+          {TestServer, key: key, initial_state: %{}}
+        )
 
       # Verify crash status was cleared and server is running
       {:ok, updated_data} = DurableServer.fetch_stored_state(store, %{key: key, prefix: prefix})
@@ -2505,8 +2648,8 @@ defmodule DurableServerTest do
       defmodule CrashingServer do
         use DurableServer, vsn: 1
 
-        def init(%{key: key, crash_after: crash_after}) do
-          {:ok, %{key: key, crash_after: crash_after, call_count: 0}}
+        def init(%{crash_after: crash_after}, info) do
+          {:ok, %{key: info.key, crash_after: crash_after, call_count: 0}}
         end
 
         def handle_call(:get_count, _from, state) do
@@ -2534,7 +2677,7 @@ defmodule DurableServerTest do
       {:ok, {pid1, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {CrashingServer, %{key: key, crash_after: 1}}
+          {CrashingServer, key: key, initial_state: %{crash_after: 1}}
         )
 
       # Trigger crash
@@ -2557,7 +2700,7 @@ defmodule DurableServerTest do
       {:ok, {restarted_pid, _meta}} =
         DurableServer.Supervisor.ensure_started_child(
           supervisor_name,
-          {CrashingServer, %{key: key, crash_after: 1}}
+          {CrashingServer, key: key, initial_state: %{crash_after: 1}}
         )
 
       # Second crash
@@ -2575,7 +2718,7 @@ defmodule DurableServerTest do
         {:ok, {current_pid, _meta}} =
           DurableServer.Supervisor.ensure_started_child(
             supervisor_name,
-            {CrashingServer, %{key: key, crash_after: 1}}
+            {CrashingServer, key: key, initial_state: %{crash_after: 1}}
           )
 
         ref = Process.monitor(current_pid)
@@ -2631,8 +2774,8 @@ defmodule DurableServerTest do
       DurableServerTest.atomify_keys(persisted_state)
     end
 
-    def init(init_state) do
-      key = init_state[:key]
+    def init(init_state, info) do
+      key = info.key
 
       if init_state[:setup_data] do
         # first write some data to storage to test decoder validation
@@ -2649,12 +2792,12 @@ defmodule DurableServerTest do
   defmodule LookupTestServer do
     use DurableServer, vsn: 1
 
-    def init(%{key: key, user_meta: user_meta}) do
-      {:ok, %{key: key, count: 0}, meta: user_meta}
+    def init(%{user_meta: user_meta}, info) do
+      {:ok, %{key: info.key, count: 0}, meta: user_meta}
     end
 
-    def init(%{key: key}) do
-      {:ok, %{key: key, count: 0}}
+    def init(_state, info) do
+      {:ok, %{key: info.key, count: 0}}
     end
 
     def dump_state(state), do: state
@@ -2668,8 +2811,8 @@ defmodule DurableServerTest do
   defmodule LookupCrashingServer do
     use DurableServer, vsn: 1
 
-    def init(%{key: key, crash_after: crash_after, user_meta: user_meta}) do
-      {:ok, %{key: key, crash_after: crash_after, call_count: 0}, meta: user_meta}
+    def init(%{crash_after: crash_after, user_meta: user_meta}, info) do
+      {:ok, %{key: info.key, crash_after: crash_after, call_count: 0}, meta: user_meta}
     end
 
     def handle_call(:get_count, _from, state) do
@@ -2700,7 +2843,7 @@ defmodule DurableServerTest do
       {:ok, {server_pid, ^user_meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {LookupTestServer, %{key: key, user_meta: user_meta}}
+          {LookupTestServer, key: key, initial_state: %{user_meta: user_meta}}
         )
 
       # test successful lookup
@@ -2731,7 +2874,7 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {LookupCrashingServer, %{key: key, user_meta: user_meta, crash_after: 1}}
+          {LookupCrashingServer, key: key, initial_state: %{user_meta: user_meta, crash_after: 1}}
         )
 
       # verify initial lookup works
@@ -2750,7 +2893,7 @@ defmodule DurableServerTest do
       case result_after_crash do
         {new_pid, ^user_meta} when new_pid != server_pid ->
           # server was restarted with new pid, user_meta preserved
-          assert Process.alive?(new_pid)
+          refute_process_down(new_pid)
 
         nil ->
           # if no automatic restart, that's also valid behavior for some configurations
@@ -2774,7 +2917,7 @@ defmodule DurableServerTest do
         {:ok, {server_pid, ^user_meta}} =
           DurableServer.Supervisor.start_child(
             supervisor_name,
-            {LookupTestServer, %{key: key, user_meta: user_meta}}
+            {LookupTestServer, key: key, initial_state: %{user_meta: user_meta}}
           )
 
         result = DurableServer.Supervisor.lookup(supervisor_name, key)
@@ -2790,7 +2933,7 @@ defmodule DurableServerTest do
       {:ok, _server_pid} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {LookupTestServer, %{key: base_key, user_meta: user_meta}}
+          {LookupTestServer, key: base_key, initial_state: %{user_meta: user_meta}}
         )
 
       # correct case should work
@@ -2822,9 +2965,9 @@ defmodule DurableServerTest do
       }
     end
 
-    def init(init_state) do
+    def init(init_state, info) do
       new_state = %{
-        key: init_state.key,
+        key: info.key,
         user_meta: init_state.user_meta,
         test_pid: nil
       }
@@ -2884,12 +3027,12 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       GenServer.call(server_pid, {:set_test_pid, self()})
 
-      assert Process.alive?(server_pid)
+      refute_process_down(server_pid)
       assert %{} = :sys.get_state(server_pid)
 
       # verify object exists in storage
@@ -2897,11 +3040,13 @@ defmodule DurableServerTest do
       assert {:ok, _} = ObjectStore.get_object(store, "#{prefix}#{key}")
 
       # delete by PID
+      ref = Process.monitor(server_pid)
+
       assert :ok =
                DurableServer.Supervisor.terminate_and_delete_child(supervisor_name, server_pid)
 
       # verify process is terminated
-      refute Process.alive?(server_pid)
+      assert_receive {:DOWN, ^ref, :process, ^server_pid, _reason}, 2_000
 
       # verify object is deleted from storage
       assert {:error, :not_found} = ObjectStore.get_object(store, "#{prefix}#{key}")
@@ -2919,22 +3064,23 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       GenServer.call(server_pid, {:set_test_pid, self()})
 
-      assert Process.alive?(server_pid)
+      refute_process_down(server_pid)
 
       # verify object exists in storage
       store = test_object_store()
       assert {:ok, _} = ObjectStore.get_object(store, "#{prefix}#{key}")
 
       # delete by key
+      ref = Process.monitor(server_pid)
       assert :ok = DurableServer.Supervisor.terminate_and_delete_child(supervisor_name, key)
 
       # verify process is terminated
-      refute Process.alive?(server_pid)
+      assert_receive {:DOWN, ^ref, :process, ^server_pid, _reason}, 2_000
 
       # verify object is deleted from storage
       assert {:error, :not_found} = ObjectStore.get_object(store, "#{prefix}#{key}")
@@ -2953,7 +3099,7 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       # set the test PID after starting
@@ -3007,25 +3153,25 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       # set the test PID after starting
       GenServer.call(server_pid, {:set_test_pid, self()})
 
       # verify server is running
-      assert Process.alive?(server_pid)
+      refute_process_down(server_pid)
 
       # verify object exists in storage
       store = test_object_store()
       assert {:ok, _} = ObjectStore.get_object(store, "#{prefix}#{key}")
 
       # call delete_self callback
-      Process.monitor(server_pid)
+      ref = Process.monitor(server_pid)
       assert :ok = GenServer.call(server_pid, :delete_self)
 
       # verify process is terminated
-      assert_receive {:DOWN, _ref, :process, ^server_pid, {:shutdown, :delete}}
+      assert_receive {:DOWN, ^ref, :process, ^server_pid, {:shutdown, :delete}}
 
       # verify object is deleted from storage
       assert {:error, :not_found} = ObjectStore.get_object(store, "#{prefix}#{key}")
@@ -3043,27 +3189,28 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       # set the test PID after starting
       GenServer.call(server_pid, {:set_test_pid, self()})
 
       # verify server is running
-      assert Process.alive?(server_pid)
+      refute_process_down(server_pid)
 
       # verify object exists in storage
       store = test_object_store()
       assert {:ok, _} = ObjectStore.get_object(store, "#{prefix}#{key}")
 
       # call delete_self_with_reply callback
+      ref = Process.monitor(server_pid)
       assert :deleted = GenServer.call(server_pid, :delete_self_with_reply)
 
       # should receive deleting message before termination
       assert_receive {:deleting, ^key}
 
       # verify process is terminated
-      refute Process.alive?(server_pid)
+      assert_receive {:DOWN, ^ref, :process, ^server_pid, {:shutdown, :delete}}, 2_000
 
       # verify object is deleted from storage
       assert {:error, :not_found} = ObjectStore.get_object(store, "#{prefix}#{key}")
@@ -3081,7 +3228,7 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       # set the test PID after starting
@@ -3144,14 +3291,14 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       # set the test PID after starting
       GenServer.call(server_pid, {:set_test_pid, self()})
 
       # verify server is running and holds a lock (by being able to call it)
-      assert Process.alive?(server_pid)
+      refute_process_down(server_pid)
       assert %{} = :sys.get_state(server_pid)
 
       # verify object exists in storage
@@ -3160,11 +3307,13 @@ defmodule DurableServerTest do
 
       # delete by PID - this should send a message to the process since it's locked
       # the process should then delete itself
+      ref = Process.monitor(server_pid)
+
       assert :ok =
                DurableServer.Supervisor.terminate_and_delete_child(supervisor_name, server_pid)
 
       # verify process is terminated
-      refute Process.alive?(server_pid)
+      assert_receive {:DOWN, ^ref, :process, ^server_pid, _reason}, 2_000
 
       # verify object is deleted from storage
       assert {:error, :not_found} = ObjectStore.get_object(store, "#{prefix}#{key}")
@@ -3189,7 +3338,7 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       GenServer.call(server_pid, {:set_test_pid, self()})
@@ -3229,7 +3378,7 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       GenServer.call(server_pid, {:set_test_pid, self()})
@@ -3276,7 +3425,7 @@ defmodule DurableServerTest do
       {:ok, {server_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {DeleteTestServer, %{key: key}}
+          {DeleteTestServer, key: key, initial_state: %{}}
         )
 
       # set the test PID after starting
@@ -3424,7 +3573,7 @@ defmodule DurableServerTest do
       assert {:error, {:already_started, pid}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {TestServer, %{key: key}}
+                 {TestServer, key: key, initial_state: %{}}
                )
 
       assert pid == self()
@@ -3433,10 +3582,51 @@ defmodule DurableServerTest do
       assert [consistent: false] in get_opts
       assert [consistent: true] in get_opts
     end
+
+    test "preloaded boot info skips storage get for preloaded stopped state" do
+      {supervisor_name, _supervisor_pid, prefix} =
+        start_test_supervisor(backend: {ConsistencyProbeBackend, owner: self()})
+
+      %{storage_backend: backend} = DurableServer.Supervisor.__get_config__(supervisor_name)
+      table = backend_table(backend)
+      key = "restart-no-read"
+      storage_key = prefix <> key
+      etag = "restart-etag"
+
+      stored_state = %StoredState{
+        vsn: 1,
+        state: %{"count" => 41},
+        meta: %DurableServer.Meta{
+          key: key,
+          prefix: prefix,
+          supervisor: supervisor_name,
+          module: TestServer,
+          status: :stopped_graceful,
+          node_str: "old@node",
+          node_ref: 123,
+          pid: self()
+        }
+      }
+
+      :ets.insert(table, {{:data, storage_key}, %{body: stored_state, etag: etag}})
+
+      assert {:ok, {pid, _meta}} =
+               DurableServer.Supervisor.__start_child__(
+                 supervisor_name,
+                 preloaded_child_spec(TestServer, [key: key, initial_state: %{}], %{
+                   body: stored_state,
+                   etag: etag
+                 }),
+                 local_only: true
+               )
+
+      assert GenServer.call(pid, :get_count) == 41
+      assert recorded_get_opts(table, storage_key) == []
+    end
   end
 
   describe "global lock circuit breaker" do
-    test "restart boots bypass an open global lock circuit breaker" do
+    test "preloaded boots bypass an open global lock circuit breaker" do
       {supervisor_name, _supervisor_pid, prefix} =
         start_test_supervisor(
           global_lock_failure_count: 1,
@@ -3449,7 +3639,7 @@ defmodule DurableServerTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: key}}
+          {TestServer, key: key, initial_state: %{}}
         )
 
       ref = Process.monitor(pid)
@@ -3470,18 +3660,21 @@ defmodule DurableServerTest do
       assert {:error, {:circuit_open, :network_partition}} =
                DurableServer.Supervisor.start_child(
                  supervisor_name,
-                 {TestServer, %{key: "fresh-#{DurableServer.UUID.uuid4()}"}}
+                 {TestServer, key: "fresh-#{DurableServer.UUID.uuid4()}", initial_state: %{}}
                )
 
       assert {:ok, {restart_pid, _meta}} =
-               DurableServer.Supervisor.start_child(
+               DurableServer.Supervisor.__start_child__(
                  supervisor_name,
-                 {TestServer, {:restart, %{key: key, body: body, etag: etag}}},
+                 preloaded_child_spec(TestServer, [key: key, initial_state: %{}], %{
+                   body: body,
+                   etag: etag
+                 }),
                  local_only: true,
                  timeout: 10_000
                )
 
-      assert Process.alive?(restart_pid)
+      refute_process_down(restart_pid)
     end
 
     test "normal races still increment the breaker but restart races do not" do
@@ -3502,14 +3695,14 @@ defmodule DurableServerTest do
           Task.async(fn ->
             DurableServer.Supervisor.start_child(
               normal_supervisor,
-              {TestServer, %{key: normal_key, init_sleep_ms: slow_init_ms}},
+              {TestServer, key: normal_key, initial_state: %{init_sleep_ms: slow_init_ms}},
               timeout: 15_000
             )
           end),
           Task.async(fn ->
             DurableServer.Supervisor.start_child(
               normal_supervisor,
-              {TestServer, %{key: normal_key, init_sleep_ms: slow_init_ms}},
+              {TestServer, key: normal_key, initial_state: %{init_sleep_ms: slow_init_ms}},
               timeout: 15_000
             )
           end)
@@ -3534,7 +3727,7 @@ defmodule DurableServerTest do
       {:ok, {seed_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           restart_supervisor,
-          {TestServer, %{key: restart_key, init_sleep_ms: slow_init_ms}},
+          {TestServer, key: restart_key, initial_state: %{init_sleep_ms: slow_init_ms}},
           timeout: 15_000
         )
 
@@ -3554,19 +3747,23 @@ defmodule DurableServerTest do
       restart_results =
         [
           Task.async(fn ->
-            DurableServer.Supervisor.start_child(
+            DurableServer.Supervisor.__start_child__(
               restart_supervisor,
-              {TestServer,
-               {:restart, %{key: restart_key, body: restart_body, etag: restart_etag}}},
+              preloaded_child_spec(TestServer, [key: restart_key, initial_state: %{}], %{
+                body: restart_body,
+                etag: restart_etag
+              }),
               local_only: true,
               timeout: 15_000
             )
           end),
           Task.async(fn ->
-            DurableServer.Supervisor.start_child(
+            DurableServer.Supervisor.__start_child__(
               restart_supervisor,
-              {TestServer,
-               {:restart, %{key: restart_key, body: restart_body, etag: restart_etag}}},
+              preloaded_child_spec(TestServer, [key: restart_key, initial_state: %{}], %{
+                body: restart_body,
+                etag: restart_etag
+              }),
               local_only: true,
               timeout: 15_000
             )
@@ -3581,7 +3778,9 @@ defmodule DurableServerTest do
       assert {:ok, {_pid, _meta}} =
                DurableServer.Supervisor.start_child(
                  restart_supervisor,
-                 {TestServer, %{key: "fresh-after-restart-race-#{DurableServer.UUID.uuid4()}"}}
+                 {TestServer,
+                  key: "fresh-after-restart-race-#{DurableServer.UUID.uuid4()}",
+                  initial_state: %{}}
                )
     end
 
@@ -3592,7 +3791,7 @@ defmodule DurableServerTest do
       {:ok, {seed_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: key}},
+          {TestServer, key: key, initial_state: %{}},
           timeout: 15_000
         )
 
@@ -3615,9 +3814,12 @@ defmodule DurableServerTest do
         Task.async(fn ->
           Process.sleep(250)
 
-          DurableServer.Supervisor.start_child(
+          DurableServer.Supervisor.__start_child__(
             supervisor_name,
-            {TestServer, {:restart, %{key: key, body: claimed_body, etag: claimed_etag}}},
+            preloaded_child_spec(TestServer, [key: key, initial_state: %{}], %{
+              body: claimed_body,
+              etag: claimed_etag
+            }),
             local_only: true,
             timeout: 15_000
           )
@@ -3626,7 +3828,7 @@ defmodule DurableServerTest do
       direct_result =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {TestServer, %{key: key}},
+          {TestServer, key: key, initial_state: %{}},
           timeout: 15_000
         )
 

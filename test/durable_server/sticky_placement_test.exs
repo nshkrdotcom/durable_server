@@ -7,8 +7,8 @@ defmodule DurableServer.StickyPlacementTest do
     use DurableServer, vsn: 1
 
     @impl true
-    def init(state) do
-      {:ok, state}
+    def init(state, info) do
+      {:ok, Map.put(state, :key, info.key)}
     end
 
     @impl true
@@ -245,7 +245,7 @@ defmodule DurableServer.StickyPlacementTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {StickyPlacementTestServer, %{key: "test-key-kw"}}
+          {StickyPlacementTestServer, key: "test-key-kw", initial_state: %{}}
         )
 
       assert is_pid(pid)
@@ -292,7 +292,7 @@ defmodule DurableServer.StickyPlacementTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {StickyPlacementTestServer, %{key: "test-key"}}
+          {StickyPlacementTestServer, key: "test-key", initial_state: %{}}
         )
 
       assert is_pid(pid)
@@ -333,7 +333,7 @@ defmodule DurableServer.StickyPlacementTest do
       {:ok, {_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {StickyPlacementTestServer, %{key: "test-key"}}
+          {StickyPlacementTestServer, key: "test-key", initial_state: %{}}
         )
 
       %{object_store: store} = DurableServer.Supervisor.__get_config__(supervisor_name)
@@ -561,7 +561,7 @@ defmodule DurableServer.StickyPlacementTest do
       {:ok, {pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {StickyPlacementTestServer, %{key: "no-sticky-test"}}
+          {StickyPlacementTestServer, key: "no-sticky-test", initial_state: %{}}
         )
 
       assert is_pid(pid)
@@ -602,7 +602,7 @@ defmodule DurableServer.StickyPlacementTest do
       {:ok, {_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {StickyPlacementTestServer, %{key: "with-any-test"}}
+          {StickyPlacementTestServer, key: "with-any-test", initial_state: %{}}
         )
 
       # Get the augmented sticky placement
@@ -641,7 +641,7 @@ defmodule DurableServer.StickyPlacementTest do
       {:ok, {_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {StickyPlacementTestServer, %{key: "without-any-test"}}
+          {StickyPlacementTestServer, key: "without-any-test", initial_state: %{}}
         )
 
       # Get the augmented sticky placement
@@ -681,7 +681,7 @@ defmodule DurableServer.StickyPlacementTest do
       {:ok, {_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {StickyPlacementTestServer, %{key: "non-matching-test"}}
+          {StickyPlacementTestServer, key: "non-matching-test", initial_state: %{}}
         )
 
       # Get the stored sticky_placement (persisted with "ord")
@@ -748,7 +748,7 @@ defmodule DurableServer.StickyPlacementTest do
       {:ok, {_pid, _meta}} =
         DurableServer.Supervisor.start_child(
           supervisor_name,
-          {StickyPlacementTestServer, %{key: "matching-test"}}
+          {StickyPlacementTestServer, key: "matching-test", initial_state: %{}}
         )
 
       augmented =
