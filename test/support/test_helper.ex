@@ -3,7 +3,24 @@ defmodule DurableServer.TestHelper do
   Test helpers for DurableServer tests.
   """
 
+  import ExUnit.Assertions
+
   alias DurableServer.ObjectStore
+
+  def assert_raise_message_contains(exception, expected, fun)
+      when is_atom(exception) and is_binary(expected) and is_function(fun, 0) do
+    error = assert_raise exception, fun
+    assert String.contains?(Exception.message(error), expected)
+    error
+  end
+
+  def assert_raise_message_contains(exception, expected_messages, fun)
+      when is_atom(exception) and is_list(expected_messages) and is_function(fun, 0) do
+    error = assert_raise exception, fun
+    message = Exception.message(error)
+    assert Enum.any?(expected_messages, &String.contains?(message, &1))
+    error
+  end
 
   @doc """
   Returns the default object store config for testing as a keyword list.

@@ -12,16 +12,10 @@ defmodule DurableServer.CircuitBreaker do
   The table is namespaced by supervisor name to allow multiple supervisors to coexist.
   """
   def new(supervisor_name, config) when is_atom(supervisor_name) do
-    table_name = circuit_breaker_table_name(supervisor_name)
     {object_store, config} = Map.pop!(config, :object_store)
 
-    case :ets.whereis(table_name) do
-      :undefined ->
-        :ets.new(table_name, [:set, :public, :named_table])
-
-      _existing ->
-        raise ArgumentError, "Circuit breaker ets table #{inspect(table_name)} already exists"
-    end
+    table_name =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :circuit_breaker, [:set, :public])
 
     %CircuitBreaker{
       object_store: object_store,
@@ -169,10 +163,6 @@ defmodule DurableServer.CircuitBreaker do
   def prune_stale_entries(%CircuitBreaker{table_name: table, config: config}) do
     current_time = System.system_time(:millisecond)
     prune(table, current_time, config.module_circuit_breaker_window_ms)
-  end
-
-  defp circuit_breaker_table_name(supervisor_name) do
-    :"circuit_breaker_#{supervisor_name}"
   end
 
   defp add_crash_to_history(history, crash_entry, config) do

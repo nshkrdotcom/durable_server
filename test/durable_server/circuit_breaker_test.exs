@@ -38,19 +38,22 @@ defmodule DurableServer.CircuitBreakerTest do
 
       assert %CircuitBreaker{} = circuit_breaker
       assert circuit_breaker.supervisor_name == supervisor_name
-      assert circuit_breaker.table_name == :"circuit_breaker_#{supervisor_name}"
+
+      assert DurableServer.RuntimeNames.table(supervisor_name, :circuit_breaker) ==
+               circuit_breaker.table_name
+
       assert circuit_breaker.config == Map.drop(@default_config, [:object_store])
       assert %ObjectStore{} = circuit_breaker.object_store
-      assert :ets.whereis(circuit_breaker.table_name) != :undefined
+      assert DurableServer.RuntimeNames.table_alive?(circuit_breaker.table_name)
     end
 
     test "raises error if ETS table already exists" do
       supervisor_name = :test_supervisor_2
       CircuitBreaker.new(supervisor_name, @default_config)
 
-      assert_raise ArgumentError, ~r/already exists/, fn ->
+      assert_raise_message_contains(ArgumentError, "already exists", fn ->
         CircuitBreaker.new(supervisor_name, @default_config)
-      end
+      end)
     end
 
     test "creates different tables for different supervisors" do
@@ -60,8 +63,8 @@ defmodule DurableServer.CircuitBreakerTest do
       cb1 = CircuitBreaker.new(supervisor1, @default_config)
       cb2 = CircuitBreaker.new(supervisor2, @default_config)
 
-      assert :ets.whereis(cb1.table_name) != :undefined
-      assert :ets.whereis(cb2.table_name) != :undefined
+      assert DurableServer.RuntimeNames.table_alive?(cb1.table_name)
+      assert DurableServer.RuntimeNames.table_alive?(cb2.table_name)
       assert cb1.table_name != cb2.table_name
     end
   end
@@ -530,8 +533,8 @@ defmodule DurableServer.CircuitBreakerTest do
       cb2 = CircuitBreaker.new(supervisor2, long_window_config)
 
       # Verify tables exist with different configs
-      assert :ets.whereis(cb1.table_name) != :undefined
-      assert :ets.whereis(cb2.table_name) != :undefined
+      assert DurableServer.RuntimeNames.table_alive?(cb1.table_name)
+      assert DurableServer.RuntimeNames.table_alive?(cb2.table_name)
     end
   end
 

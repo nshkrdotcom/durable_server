@@ -9,11 +9,7 @@ defmodule DurableServer.UUIDTest do
 
       assert is_binary(uuid)
       assert byte_size(uuid) == 36
-
-      assert Regex.match?(
-               ~r/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-               uuid
-             )
+      assert valid_uuid4?(uuid)
     end
 
     test "generates unique UUIDs" do
@@ -38,4 +34,23 @@ defmodule DurableServer.UUIDTest do
       end
     end
   end
+
+  defp valid_uuid4?(uuid) do
+    with <<part1::binary-size(8), ?-, part2::binary-size(4), ?-, part3::binary-size(4), ?-,
+           part4::binary-size(4), ?-, part5::binary-size(12)>> <- uuid,
+         true <- hex?(part1),
+         true <- hex?(part2),
+         <<"4", tail3::binary>> <- part3,
+         true <- hex?(tail3),
+         <<variant, tail4::binary>> <- part4,
+         true <- variant in [?8, ?9, ?a, ?b],
+         true <- hex?(tail4),
+         true <- hex?(part5) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp hex?(part), do: part |> String.to_charlist() |> Enum.all?(&(&1 in ?0..?9 or &1 in ?a..?f))
 end

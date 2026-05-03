@@ -1,5 +1,6 @@
 defmodule DurableServer.StorageBackendTest do
   use ExUnit.Case, async: true
+  import DurableServer.TestHelper
 
   alias DurableServer.StorageBackend
 
@@ -62,17 +63,17 @@ defmodule DurableServer.StorageBackendTest do
   test "raises when :state is missing" do
     raw = {:ok, %{defaults: %{heartbeat_tracking_mode: :poll}}}
 
-    assert_raise ArgumentError, ~r/missing required key :state/, fn ->
+    assert_raise_message_contains(ArgumentError, "missing required key :state", fn ->
       StorageBackend.init_backend(DynamicInitBackend, raw)
-    end
+    end)
   end
 
   test "rejects unknown default keys" do
     raw = {:ok, %{state: :ok, defaults: %{typo_interval: 1_000}}}
 
-    assert_raise ArgumentError, ~r/unknown keys: \[:typo_interval\]/, fn ->
+    assert_raise_message_contains(ArgumentError, "unknown keys: [:typo_interval]", fn ->
       StorageBackend.init_backend(DynamicInitBackend, raw)
-    end
+    end)
   end
 
   test "rejects invalid default values and invalid features" do
@@ -83,9 +84,13 @@ defmodule DurableServer.StorageBackendTest do
          defaults: %{heartbeat_tracking_mode: :bad_mode}
        }}
 
-    assert_raise ArgumentError, ~r/heartbeat_tracking_mode must be :poll or :subscribe/, fn ->
-      StorageBackend.init_backend(DynamicInitBackend, raw_defaults)
-    end
+    assert_raise_message_contains(
+      ArgumentError,
+      "heartbeat_tracking_mode must be :poll or :subscribe",
+      fn ->
+        StorageBackend.init_backend(DynamicInitBackend, raw_defaults)
+      end
+    )
 
     raw_features =
       {:ok,
@@ -94,14 +99,22 @@ defmodule DurableServer.StorageBackendTest do
          features: %{heartbeat_subscribe?: "yes"}
        }}
 
-    assert_raise ArgumentError, ~r/feature :heartbeat_subscribe\? must be a boolean/, fn ->
-      StorageBackend.init_backend(DynamicInitBackend, raw_features)
-    end
+    assert_raise_message_contains(
+      ArgumentError,
+      "feature :heartbeat_subscribe? must be a boolean",
+      fn ->
+        StorageBackend.init_backend(DynamicInitBackend, raw_features)
+      end
+    )
   end
 
   test "rejects non tuple callback return value" do
-    assert_raise ArgumentError, ~r/must return \{:ok, map\} or \{:error, reason\}/, fn ->
-      StorageBackend.init_backend(DynamicInitBackend, %{state: :ok})
-    end
+    assert_raise_message_contains(
+      ArgumentError,
+      "must return {:ok, map} or {:error, reason}",
+      fn ->
+        StorageBackend.init_backend(DynamicInitBackend, %{state: :ok})
+      end
+    )
   end
 end

@@ -300,7 +300,7 @@ defmodule DurableServer.WatermarkTest do
       supervisor_name: supervisor_name,
       prefix: prefix
     } do
-      assert_raise RuntimeError, ~r/ArgumentError.*Invalid max_children entry/, fn ->
+      assert_raise_message_contains(RuntimeError, "Invalid max_children entry", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -308,7 +308,7 @@ defmodule DurableServer.WatermarkTest do
            object_store: test_object_store_opts(),
            max_children: %{:total => 0}}
         )
-      end
+      end)
     end
 
     test "accepts max_cpu values above 100", %{
@@ -331,7 +331,7 @@ defmodule DurableServer.WatermarkTest do
       supervisor_name = :"test_supervisor_cpu_#{:erlang.unique_integer([:positive])}"
       prefix = "watermark_test_cpu_#{:erlang.unique_integer([:positive])}/"
 
-      assert_raise RuntimeError, ~r/ArgumentError.*max_cpu must be a positive integer/, fn ->
+      assert_raise_message_contains(RuntimeError, "max_cpu must be a positive integer", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -339,11 +339,11 @@ defmodule DurableServer.WatermarkTest do
            object_store: test_object_store_opts(),
            max_cpu: 0}
         )
-      end
+      end)
     end
 
     test "rejects invalid max_memory values", %{supervisor_name: supervisor_name, prefix: prefix} do
-      assert_raise RuntimeError, ~r/ArgumentError.*max_memory must be an integer/, fn ->
+      assert_raise_message_contains(RuntimeError, "max_memory must be an integer", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -351,14 +351,14 @@ defmodule DurableServer.WatermarkTest do
            object_store: test_object_store_opts(),
            max_memory: 101}
         )
-      end
+      end)
     end
 
     test "rejects invalid max_memory negative value" do
       supervisor_name = :"test_supervisor_mem_#{:erlang.unique_integer([:positive])}"
       prefix = "watermark_test_mem_#{:erlang.unique_integer([:positive])}/"
 
-      assert_raise RuntimeError, ~r/ArgumentError.*max_memory must be an integer/, fn ->
+      assert_raise_message_contains(RuntimeError, "max_memory must be an integer", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -366,14 +366,14 @@ defmodule DurableServer.WatermarkTest do
            object_store: test_object_store_opts(),
            max_memory: -1}
         )
-      end
+      end)
     end
 
     test "rejects invalid max_disk with percent over 100", %{
       supervisor_name: supervisor_name,
       prefix: prefix
     } do
-      assert_raise RuntimeError, ~r/ArgumentError.*max_disk must be/, fn ->
+      assert_raise_message_contains(RuntimeError, "max_disk must be", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -381,14 +381,14 @@ defmodule DurableServer.WatermarkTest do
            object_store: test_object_store_opts(),
            max_disk: {101, "/data"}}
         )
-      end
+      end)
     end
 
     test "rejects invalid max_disk with zero percent" do
       supervisor_name = :"test_supervisor_disk_#{:erlang.unique_integer([:positive])}"
       prefix = "watermark_test_disk_#{:erlang.unique_integer([:positive])}/"
 
-      assert_raise RuntimeError, ~r/ArgumentError.*max_disk must be/, fn ->
+      assert_raise_message_contains(RuntimeError, "max_disk must be", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -396,14 +396,14 @@ defmodule DurableServer.WatermarkTest do
            object_store: test_object_store_opts(),
            max_disk: {0, "/data"}}
         )
-      end
+      end)
     end
 
     test "rejects invalid max_disk with non-binary mount point", %{
       supervisor_name: supervisor_name,
       prefix: prefix
     } do
-      assert_raise RuntimeError, ~r/ArgumentError.*max_disk must be/, fn ->
+      assert_raise_message_contains(RuntimeError, "max_disk must be", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -411,7 +411,7 @@ defmodule DurableServer.WatermarkTest do
            object_store: test_object_store_opts(),
            max_disk: {90, :data}}
         )
-      end
+      end)
     end
 
     test "accepts valid max_disk configuration", %{

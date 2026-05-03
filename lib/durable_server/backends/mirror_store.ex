@@ -186,8 +186,8 @@ defmodule DurableServer.Backends.MirrorStore do
   @preference [:primary, :secondary]
 
   @type state :: %{
-          required(:primary) => StorageBackend.t(),
-          required(:secondary) => StorageBackend.t(),
+          required(:primary) => term(),
+          required(:secondary) => term(),
           required(:read_preference) => :primary | :secondary,
           required(:write_target) => :primary | :secondary,
           required(:fallback_reads) => boolean(),

@@ -2,6 +2,7 @@ defmodule DurableServer.SupervisorBackendSpecTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  import DurableServer.TestHelper
 
   alias DurableServer.LifecycleManager
   alias DurableServer.Backends.EKVStore
@@ -189,35 +190,43 @@ defmodule DurableServer.SupervisorBackendSpecTest do
   end
 
   test "EKV start: false rejects managed startup opts" do
-    assert_raise RuntimeError, ~r/start: false cannot include managed EKV startup opts/, fn ->
-      start_supervised!(
-        {DurableServer.Supervisor,
-         [
-           name: unique_supervisor_name("ekv_external_invalid"),
-           prefix: unique_prefix("ekv_external_invalid"),
-           backend:
-             {EKVStore,
-              [
-                name: :external_ekv_invalid,
-                start: false,
-                data_dir: "/tmp/should_not_start"
-              ]}
-         ]}
-      )
-    end
+    assert_raise_message_contains(
+      RuntimeError,
+      "start: false cannot include managed EKV startup opts",
+      fn ->
+        start_supervised!(
+          {DurableServer.Supervisor,
+           [
+             name: unique_supervisor_name("ekv_external_invalid"),
+             prefix: unique_prefix("ekv_external_invalid"),
+             backend:
+               {EKVStore,
+                [
+                  name: :external_ekv_invalid,
+                  start: false,
+                  data_dir: "/tmp/should_not_start"
+                ]}
+           ]}
+        )
+      end
+    )
   end
 
   test "EKV backend with only a name remains external by default" do
-    assert_raise RuntimeError, ~r/could not start child|failed to start child/i, fn ->
-      start_supervised!(
-        {DurableServer.Supervisor,
-         [
-           name: unique_supervisor_name("ekv_external_default"),
-           prefix: unique_prefix("ekv_external_default"),
-           backend: {EKVStore, [name: :external_by_default]}
-         ]}
-      )
-    end
+    assert_raise_message_contains(
+      RuntimeError,
+      ["could not start child", "failed to start child"],
+      fn ->
+        start_supervised!(
+          {DurableServer.Supervisor,
+           [
+             name: unique_supervisor_name("ekv_external_default"),
+             prefix: unique_prefix("ekv_external_default"),
+             backend: {EKVStore, [name: :external_by_default]}
+           ]}
+        )
+      end
+    )
   end
 
   test "ready? requires lifecycle manager, not just the supervisor pid" do
@@ -368,7 +377,7 @@ defmodule DurableServer.SupervisorBackendSpecTest do
     supervisor_name = unique_supervisor_name("invalid_discovery_tuning")
     prefix = unique_prefix("invalid_discovery_tuning")
 
-    assert_raise RuntimeError, ~r/initial_discovery_delay_ms/, fn ->
+    assert_raise_message_contains(RuntimeError, "initial_discovery_delay_ms", fn ->
       start_supervised!(
         {DurableServer.Supervisor,
          [
@@ -378,9 +387,9 @@ defmodule DurableServer.SupervisorBackendSpecTest do
            initial_discovery_delay_ms: {20, 10}
          ]}
       )
-    end
+    end)
 
-    assert_raise RuntimeError, ~r/discovery_shuffle_batch_size/, fn ->
+    assert_raise_message_contains(RuntimeError, "discovery_shuffle_batch_size", fn ->
       start_supervised!(
         {DurableServer.Supervisor,
          [
@@ -390,9 +399,9 @@ defmodule DurableServer.SupervisorBackendSpecTest do
            discovery_shuffle_batch_size: 0
          ]}
       )
-    end
+    end)
 
-    assert_raise RuntimeError, ~r/parallel_restart_batch_size/, fn ->
+    assert_raise_message_contains(RuntimeError, "parallel_restart_batch_size", fn ->
       start_supervised!(
         {DurableServer.Supervisor,
          [
@@ -402,9 +411,9 @@ defmodule DurableServer.SupervisorBackendSpecTest do
            parallel_restart_batch_size: 0
          ]}
       )
-    end
+    end)
 
-    assert_raise RuntimeError, ~r/restart_start_timeout_ms/, fn ->
+    assert_raise_message_contains(RuntimeError, "restart_start_timeout_ms", fn ->
       start_supervised!(
         {DurableServer.Supervisor,
          [
@@ -414,9 +423,9 @@ defmodule DurableServer.SupervisorBackendSpecTest do
            restart_start_timeout_ms: 0
          ]}
       )
-    end
+    end)
 
-    assert_raise RuntimeError, ~r/heartbeat_staleness_threshold_ms/, fn ->
+    assert_raise_message_contains(RuntimeError, "heartbeat_staleness_threshold_ms", fn ->
       start_supervised!(
         {DurableServer.Supervisor,
          [
@@ -426,9 +435,9 @@ defmodule DurableServer.SupervisorBackendSpecTest do
            heartbeat_staleness_threshold_ms: 2_000
          ]}
       )
-    end
+    end)
 
-    assert_raise RuntimeError, ~r/heartbeat_interval_ms/, fn ->
+    assert_raise_message_contains(RuntimeError, "heartbeat_interval_ms", fn ->
       start_supervised!(
         {DurableServer.Supervisor,
          [
@@ -439,9 +448,9 @@ defmodule DurableServer.SupervisorBackendSpecTest do
            heartbeat_staleness_threshold_ms: 15_000
          ]}
       )
-    end
+    end)
 
-    assert_raise RuntimeError, ~r/restart_claim_preferred_fanout/, fn ->
+    assert_raise_message_contains(RuntimeError, "restart_claim_preferred_fanout", fn ->
       start_supervised!(
         {DurableServer.Supervisor,
          [
@@ -451,37 +460,41 @@ defmodule DurableServer.SupervisorBackendSpecTest do
            restart_claim_preferred_fanout: 0
          ]}
       )
-    end
+    end)
 
-    assert_raise RuntimeError,
-                 ~r/restart_claim_expanded_fanout must be >= restart_claim_preferred_fanout/,
-                 fn ->
-                   start_supervised!(
-                     {DurableServer.Supervisor,
-                      [
-                        name: unique_supervisor_name("invalid_restart_expanded"),
-                        prefix: unique_prefix("invalid_restart_expanded"),
-                        backend: {InMemoryBackend, name: :invalid_restart_expanded},
-                        restart_claim_preferred_fanout: 3,
-                        restart_claim_expanded_fanout: 2
-                      ]}
-                   )
-                 end
+    assert_raise_message_contains(
+      RuntimeError,
+      "restart_claim_expanded_fanout must be >= restart_claim_preferred_fanout",
+      fn ->
+        start_supervised!(
+          {DurableServer.Supervisor,
+           [
+             name: unique_supervisor_name("invalid_restart_expanded"),
+             prefix: unique_prefix("invalid_restart_expanded"),
+             backend: {InMemoryBackend, name: :invalid_restart_expanded},
+             restart_claim_preferred_fanout: 3,
+             restart_claim_expanded_fanout: 2
+           ]}
+        )
+      end
+    )
 
-    assert_raise RuntimeError,
-                 ~r/restart_claim_gate_disable_after_ms must be >= restart_claim_gate_expand_after_ms/,
-                 fn ->
-                   start_supervised!(
-                     {DurableServer.Supervisor,
-                      [
-                        name: unique_supervisor_name("invalid_restart_disable"),
-                        prefix: unique_prefix("invalid_restart_disable"),
-                        backend: {InMemoryBackend, name: :invalid_restart_disable},
-                        restart_claim_gate_expand_after_ms: 5_000,
-                        restart_claim_gate_disable_after_ms: 4_999
-                      ]}
-                   )
-                 end
+    assert_raise_message_contains(
+      RuntimeError,
+      "restart_claim_gate_disable_after_ms must be >= restart_claim_gate_expand_after_ms",
+      fn ->
+        start_supervised!(
+          {DurableServer.Supervisor,
+           [
+             name: unique_supervisor_name("invalid_restart_disable"),
+             prefix: unique_prefix("invalid_restart_disable"),
+             backend: {InMemoryBackend, name: :invalid_restart_disable},
+             restart_claim_gate_expand_after_ms: 5_000,
+             restart_claim_gate_disable_after_ms: 4_999
+           ]}
+        )
+      end
+    )
   end
 
   test "safe_erpc_call rethrows remote not_ready as a local throw" do

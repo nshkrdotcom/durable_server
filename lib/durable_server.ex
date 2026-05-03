@@ -713,9 +713,9 @@ defmodule DurableServer do
 
   This means persisted shapes may differ by backend. For example:
 
-  - `DurableServer.Backends.ObjectStore` typically encodes to and decodes from JSON-shaped data
-    with string keys
-  - `DurableServer.Backends.EKVStore` may preserve richer Elixir terms
+  - The object store backend typically encodes to and decodes from JSON-shaped
+    data with string keys
+  - The EKV backend may preserve richer Elixir terms
 
   If you plan to move data between backends, `load_state/2` should be prepared to
   handle multiple persisted shapes during the migration window.
@@ -745,8 +745,8 @@ defmodule DurableServer do
 
   Persisted state is backend-dependent. For example:
 
-  - `DurableServer.Backends.ObjectStore` usually passes JSON-decoded maps with string keys
-  - `DurableServer.Backends.EKVStore` may pass maps with atom keys or other native Elixir terms
+  - The object store backend usually passes JSON-decoded maps with string keys
+  - The EKV backend may pass maps with atom keys or other native Elixir terms
 
   During backend migrations, it is valid for `load_state/2` to receive multiple
   historical shapes until the migration is complete.
@@ -2795,10 +2795,12 @@ defmodule DurableServer do
       # remote node, try rpc if we see the node online
       node_str in Enum.map(Node.list(), &to_string/1) ->
         report_lock_diagnostic(sup_name, :check_lock_rpc_attempt)
+        remote_node = Enum.find(Node.list(), &(Atom.to_string(&1) == node_str))
+
         # remote node - use erpc
         rpc_result =
           erpc_call(
-            String.to_existing_atom(node_str),
+            remote_node,
             __MODULE__,
             :__check_lock__,
             [

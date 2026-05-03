@@ -154,8 +154,7 @@ defmodule DurableServer.Terminator do
 
   defp get_durable_server_children(supervisor_name) do
     try do
-      # Get the DynamicSupervisor child name
-      dynamic_sup_name = :"#{supervisor_name}_dynamic"
+      dynamic_sup_name = DurableServer.Supervisor.get_dynamic_supervisor(supervisor_name)
 
       dynamic_sup_name
       |> DynamicSupervisor.which_children()

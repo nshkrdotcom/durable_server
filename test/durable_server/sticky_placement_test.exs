@@ -77,7 +77,7 @@ defmodule DurableServer.StickyPlacementTest do
       supervisor_name: supervisor_name,
       prefix: prefix
     } do
-      assert_raise RuntimeError, ~r/must be a keyword list/, fn ->
+      assert_raise_message_contains(RuntimeError, "must be a keyword list", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -89,14 +89,14 @@ defmodule DurableServer.StickyPlacementTest do
              }
            }}
         )
-      end
+      end)
     end
 
     test "raises on invalid delay (non-integer)", %{
       supervisor_name: supervisor_name,
       prefix: prefix
     } do
-      assert_raise RuntimeError, ~r/must be non-negative integers/, fn ->
+      assert_raise_message_contains(RuntimeError, "must be non-negative integers", fn ->
         start_supervised!(
           {DurableServer.Supervisor,
            name: supervisor_name,
@@ -108,7 +108,7 @@ defmodule DurableServer.StickyPlacementTest do
              ]
            }}
         )
-      end
+      end)
     end
   end
 
@@ -369,7 +369,7 @@ defmodule DurableServer.StickyPlacementTest do
       Process.sleep(100)
 
       # Check heartbeat table
-      table_name = :"durable_server_heartbeats_#{supervisor_name}"
+      table_name = DurableServer.RuntimeNames.table(supervisor_name, :heartbeats)
       node_str = Atom.to_string(Node.self())
 
       case :ets.lookup(table_name, node_str) do
@@ -400,7 +400,7 @@ defmodule DurableServer.StickyPlacementTest do
       # Wait for heartbeat
       Process.sleep(100)
 
-      table_name = :"durable_server_heartbeats_#{supervisor_name}"
+      table_name = DurableServer.RuntimeNames.table(supervisor_name, :heartbeats)
       node_str = Atom.to_string(Node.self())
 
       case :ets.lookup(table_name, node_str) do

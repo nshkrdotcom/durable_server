@@ -6,7 +6,12 @@ case File.read(".env") do
     |> Enum.reject(&(&1 == "" or String.starts_with?(String.trim(&1), "#")))
     |> Enum.each(fn line ->
       with [key, val] <- String.split(line, "=", parts: 2) do
-        System.put_env(String.trim(key), String.replace(val, ~r/^[\s"']+|[\s"']+$/, ""))
+        value =
+          val
+          |> String.trim()
+          |> String.trim("\"'")
+
+        System.put_env(String.trim(key), value)
       end
     end)
 

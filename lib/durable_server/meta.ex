@@ -116,9 +116,9 @@ defmodule DurableServer.Meta do
          node_ref: expected_node_ref
        })
        when is_atom(supervisor) and is_binary(node_str) and is_integer(expected_node_ref) do
-    table_name = :"durable_server_heartbeats_#{supervisor}"
+    table = DurableServer.RuntimeNames.table(supervisor, :heartbeats)
 
-    case :ets.lookup(table_name, node_str) do
+    case table && :ets.lookup(table, node_str) do
       [{^node_str, ^expected_node_ref, timestamp, _region, _capacity, _resources, _env_vars}] ->
         # node found and node_ref matches - this is the current incarnation
         timestamp
@@ -131,7 +131,12 @@ defmodule DurableServer.Meta do
       [] ->
         # node not found in ETS cache
         nil
+
+      nil ->
+        nil
     end
+  rescue
+    ArgumentError -> nil
   end
 
   # Fallback for when node_ref is not an integer or fields are missing

@@ -171,7 +171,8 @@ defmodule DurableServer.LifecycleManager do
   @heartbeat_group_key "__heartbeat"
   @heartbeat_write_retry_backoff_ms {50, 250}
 
-  def name(supervisor_name), do: :"#{supervisor_name}_lifecycle_manager"
+  def name(supervisor_name),
+    do: DurableServer.RuntimeNames.process_name(supervisor_name, :lifecycle_manager)
 
   def start_link(opts) do
     supervisor_name = Keyword.fetch!(opts, :supervisor_name)
@@ -200,11 +201,9 @@ defmodule DurableServer.LifecycleManager do
   `{:remote_placement_erpc_error, :timeout}`).
   """
   def get_discovery_diagnostics(supervisor_name) when is_atom(supervisor_name) do
-    table_name = discovery_diagnostics_table_name(supervisor_name)
-
-    case :ets.whereis(table_name) do
-      :undefined -> %{}
-      _ -> :ets.tab2list(table_name) |> Map.new()
+    case discovery_diagnostics_table_name(supervisor_name) do
+      nil -> %{}
+      table_name -> :ets.tab2list(table_name) |> Map.new()
     end
   rescue
     ArgumentError -> %{}
@@ -219,6 +218,7 @@ defmodule DurableServer.LifecycleManager do
     gate_first_seen_at = Keyword.get(opts, :gate_first_seen_at, now)
     local_candidate_batch_size = Keyword.get(opts, :local_candidate_batch_size)
     local_tail_bypass_threshold = Keyword.get(opts, :local_tail_bypass_threshold)
+    known_nodes = Keyword.get(opts, :known_nodes)
 
     preferred_restart_claimer?(
       supervisor_name,
@@ -228,7 +228,8 @@ defmodule DurableServer.LifecycleManager do
       now,
       gate_first_seen_at,
       local_candidate_batch_size,
-      local_tail_bypass_threshold
+      local_tail_bypass_threshold,
+      known_nodes
     )
   end
 
@@ -262,13 +263,11 @@ defmodule DurableServer.LifecycleManager do
     if high_cardinality_diag_key?(key) do
       :ok
     else
-      table_name = discovery_diagnostics_table_name(supervisor_name)
-
-      case :ets.whereis(table_name) do
-        :undefined ->
+      case discovery_diagnostics_table_name(supervisor_name) do
+        nil ->
           :ok
 
-        _ ->
+        table_name ->
           :ets.update_counter(table_name, key, {2, count}, {key, 0})
           :ok
       end
@@ -358,31 +357,31 @@ defmodule DurableServer.LifecycleManager do
 
     validate_discovery_config!(config)
 
-    hearbeat_tab = heartbeat_table_name(supervisor_name)
-    :ets.new(hearbeat_tab, [:set, :public, :named_table, read_concurrency: true])
+    hearbeat_tab =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :heartbeats, [
+        :set,
+        :public,
+        read_concurrency: true
+      ])
 
-    skip_tab = :"durable_server_discovery_skip_#{supervisor_name}"
-    :ets.new(skip_tab, [:set, :public, :named_table])
+    skip_tab =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :discovery_skip, [:set, :public])
 
-    restart_gate_tab = restart_gate_table_name(supervisor_name)
+    restart_gate_tab =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :restart_gate, [
+        :set,
+        :public,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
 
-    :ets.new(restart_gate_tab, [
-      :set,
-      :public,
-      :named_table,
-      read_concurrency: true,
-      write_concurrency: true
-    ])
-
-    diagnostics_tab = discovery_diagnostics_table_name(supervisor_name)
-
-    :ets.new(diagnostics_tab, [
-      :set,
-      :public,
-      :named_table,
-      read_concurrency: true,
-      write_concurrency: true
-    ])
+    diagnostics_tab =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :discovery_diagnostics, [
+        :set,
+        :public,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
 
     state = %LifecycleManager{
       supervisor_name: supervisor_name,
@@ -1301,15 +1300,11 @@ defmodule DurableServer.LifecycleManager do
   end
 
   defp heartbeat_table_name(supervisor_name) when is_atom(supervisor_name) do
-    :"durable_server_heartbeats_#{supervisor_name}"
+    DurableServer.RuntimeNames.table(supervisor_name, :heartbeats)
   end
 
   defp discovery_diagnostics_table_name(supervisor_name) when is_atom(supervisor_name) do
-    :"durable_server_discovery_diag_#{supervisor_name}"
-  end
-
-  defp restart_gate_table_name(supervisor_name) when is_atom(supervisor_name) do
-    :"durable_server_restart_gate_#{supervisor_name}"
+    DurableServer.RuntimeNames.table(supervisor_name, :discovery_diagnostics)
   end
 
   # Join the Group heartbeat PG key with our heartbeat metadata so other nodes
@@ -1657,7 +1652,8 @@ defmodule DurableServer.LifecycleManager do
          now,
          gate_first_seen_at,
          local_candidate_batch_size,
-         local_tail_bypass_threshold
+         local_tail_bypass_threshold,
+         known_nodes
        ) do
     gate_first_seen_at =
       case gate_first_seen_at do
@@ -1678,11 +1674,29 @@ defmodule DurableServer.LifecycleManager do
         case restart_claim_contention_fanout(gate_config, now, gate_first_seen_at) do
           {:preferred, fanout} ->
             report_diagnostic(supervisor_name, :restart_gate_fanout_preferred)
-            decide_restart_gate(supervisor_name, meta, gate_config, local_node, now, fanout)
+
+            decide_restart_gate(
+              supervisor_name,
+              meta,
+              gate_config,
+              local_node,
+              now,
+              fanout,
+              known_nodes
+            )
 
           {:expanded, fanout} ->
             report_diagnostic(supervisor_name, :restart_gate_fanout_expanded)
-            decide_restart_gate(supervisor_name, meta, gate_config, local_node, now, fanout)
+
+            decide_restart_gate(
+              supervisor_name,
+              meta,
+              gate_config,
+              local_node,
+              now,
+              fanout,
+              known_nodes
+            )
 
           :all ->
             report_diagnostic(supervisor_name, :restart_gate_fanout_all)
@@ -1691,9 +1705,17 @@ defmodule DurableServer.LifecycleManager do
     end
   end
 
-  defp decide_restart_gate(supervisor_name, %Meta{} = meta, gate_config, local_node, now, fanout)
+  defp decide_restart_gate(
+         supervisor_name,
+         %Meta{} = meta,
+         gate_config,
+         local_node,
+         now,
+         fanout,
+         known_nodes
+       )
        when is_integer(fanout) and fanout > 0 do
-    case eligible_restart_claim_nodes(supervisor_name, meta, gate_config, now) do
+    case eligible_restart_claim_nodes(supervisor_name, meta, gate_config, now, known_nodes) do
       nodes when is_list(nodes) ->
         cond do
           length(nodes) < 2 ->
@@ -1738,15 +1760,21 @@ defmodule DurableServer.LifecycleManager do
     end
   end
 
-  defp eligible_restart_claim_nodes(supervisor_name, %Meta{} = meta, _gate_config, now)
+  defp eligible_restart_claim_nodes(
+         supervisor_name,
+         %Meta{} = meta,
+         _gate_config,
+         now,
+         known_nodes
+       )
        when is_atom(supervisor_name) and is_integer(now) do
     heartbeat_table = heartbeat_table_name(supervisor_name)
 
-    case :ets.whereis(heartbeat_table) do
-      :undefined ->
+    case heartbeat_table do
+      nil ->
         []
 
-      _ ->
+      _table ->
         sticky_placement =
           DurableServer.Supervisor.__augment_sticky_placement__(
             supervisor_name,
@@ -1771,46 +1799,59 @@ defmodule DurableServer.LifecycleManager do
         merge_heartbeat_sources(supervisor_name, heartbeat_table, now)
         |> Enum.flat_map(fn {node_str, node_ref, timestamp, capacity, resources, env_vars,
                              heartbeat_meta} ->
-          try do
-            node = String.to_existing_atom(node_str)
+          case known_node_from_string(node_str, known_nodes) do
+            nil ->
+              []
 
-            if now - timestamp <= @node_health_staleness_threshold_ms do
-              candidate_health =
-                {:healthy,
-                 %{
-                   node_ref: node_ref,
-                   capacity: capacity,
-                   resources: resources,
-                   env_vars: env_vars,
-                   heartbeat_meta: heartbeat_meta
-                 }}
+            node ->
+              if now - timestamp <= @node_health_staleness_threshold_ms do
+                candidate_health =
+                  {:healthy,
+                   %{
+                     node_ref: node_ref,
+                     capacity: capacity,
+                     resources: resources,
+                     env_vars: env_vars,
+                     heartbeat_meta: heartbeat_meta
+                   }}
 
-              matching_level = restart_claim_matching_level(sticky_placement, env_vars)
+                matching_level = restart_claim_matching_level(sticky_placement, env_vars)
 
-              if restart_claim_node_eligible?(
-                   meta,
-                   sticky_placement,
-                   delays,
-                   needs_restart,
-                   node_unhealthy_or_full,
-                   matching_level,
-                   candidate_health
-                 ) do
-                [node]
+                if restart_claim_node_eligible?(
+                     meta,
+                     sticky_placement,
+                     delays,
+                     needs_restart,
+                     node_unhealthy_or_full,
+                     matching_level,
+                     candidate_health
+                   ) do
+                  [node]
+                else
+                  []
+                end
               else
                 []
               end
-            else
-              []
-            end
-          rescue
-            ArgumentError ->
-              []
           end
         end)
         |> Enum.uniq()
     end
   end
+
+  defp known_node_from_string(node_str, known_nodes \\ nil)
+
+  defp known_node_from_string(node_str, known_nodes) when is_binary(node_str) do
+    nodes =
+      case known_nodes do
+        nodes when is_list(nodes) -> nodes
+        _ -> [Node.self() | Node.list()]
+      end
+
+    Enum.find(nodes, &(is_atom(&1) and Atom.to_string(&1) == node_str))
+  end
+
+  defp known_node_from_string(_, _), do: nil
 
   defp restart_claim_node_eligible?(
          %Meta{} = meta,
@@ -1901,6 +1942,7 @@ defmodule DurableServer.LifecycleManager do
         default_restart_claim_gate_config()
     end
   rescue
+    ArgumentError -> default_restart_claim_gate_config()
     RuntimeError -> default_restart_claim_gate_config()
   end
 
@@ -1991,7 +2033,8 @@ defmodule DurableServer.LifecycleManager do
                  now,
                  gate_first_seen_at,
                  local_candidate_batch_size,
-                 state.parallel_restart_batch_size
+                 state.parallel_restart_batch_size,
+                 nil
                ) do
               attempt_restart(state, obj, claim_opts)
             else
@@ -2051,9 +2094,10 @@ defmodule DurableServer.LifecycleManager do
   end
 
   defp discovery_diag_snapshot(%LifecycleManager{} = state) do
-    case :ets.whereis(state.discovery_diag_table) do
-      :undefined -> %{}
-      _ -> :ets.tab2list(state.discovery_diag_table) |> Map.new()
+    if DurableServer.RuntimeNames.table_alive?(state.discovery_diag_table) do
+      :ets.tab2list(state.discovery_diag_table) |> Map.new()
+    else
+      %{}
     end
   rescue
     ArgumentError -> %{}
@@ -2996,12 +3040,8 @@ defmodule DurableServer.LifecycleManager do
   defp parse_capacity(capacity) when is_map(capacity) do
     Enum.into(capacity, %{}, fn
       {"total", value} -> {:total, parse_capacity_value(value)}
-      {module_str, value} -> {String.to_existing_atom(module_str), parse_capacity_value(value)}
+      {module_str, value} when is_binary(module_str) -> {module_str, parse_capacity_value(value)}
     end)
-  rescue
-    ArgumentError ->
-      # module doesn't exist as an atom, return nil
-      nil
   end
 
   defp parse_capacity_value(%{"current" => c, "limit" => l})
@@ -3078,8 +3118,8 @@ defmodule DurableServer.LifecycleManager do
   def find_eligible_nodes(supervisor_name, module, opts \\ []) when is_atom(supervisor_name) do
     heartbeat_table = heartbeat_table_name(supervisor_name)
     # Handle case where table doesn't exist yet during startup
-    case :ets.whereis(heartbeat_table) do
-      :undefined ->
+    case heartbeat_table do
+      nil ->
         []
 
       _tid ->
@@ -3118,31 +3158,30 @@ defmodule DurableServer.LifecycleManager do
         merged_nodes
         |> Enum.map(fn {node_str, node_ref, timestamp, capacity, resources, env_vars,
                         heartbeat_meta} ->
-          try do
-            node = String.to_existing_atom(node_str)
-
-            heartbeat_age_ms = now - timestamp
-
-            health =
-              if heartbeat_age_ms <= @node_health_staleness_threshold_ms do
-                {:healthy,
-                 %{
-                   node_ref: node_ref,
-                   capacity: capacity,
-                   resources: resources,
-                   env_vars: env_vars,
-                   heartbeat_meta: heartbeat_meta
-                 }}
-              else
-                :stale
-              end
-
-            matching_level = find_matching_level(sticky_placement, env_vars)
-
-            {node, health, matching_level, timestamp}
-          rescue
-            ArgumentError ->
+          case known_node_from_string(node_str) do
+            nil ->
               nil
+
+            node ->
+              heartbeat_age_ms = now - timestamp
+
+              health =
+                if heartbeat_age_ms <= @node_health_staleness_threshold_ms do
+                  {:healthy,
+                   %{
+                     node_ref: node_ref,
+                     capacity: capacity,
+                     resources: resources,
+                     env_vars: env_vars,
+                     heartbeat_meta: heartbeat_meta
+                   }}
+                else
+                  :stale
+                end
+
+              matching_level = find_matching_level(sticky_placement, env_vars)
+
+              {node, health, matching_level, timestamp}
           end
         end)
         |> Enum.reject(&is_nil/1)
@@ -3345,8 +3384,10 @@ defmodule DurableServer.LifecycleManager do
       end
 
     # check module-specific limit
+    module_capacity = Map.get(capacity, module) || Map.get(capacity, Atom.to_string(module))
+
     module_ok =
-      case capacity[module] do
+      case module_capacity do
         %{current: current, limit: limit} -> current < limit
         nil -> true
       end

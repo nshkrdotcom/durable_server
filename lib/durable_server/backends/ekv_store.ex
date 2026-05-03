@@ -22,7 +22,7 @@ defmodule DurableServer.Backends.EKVStore do
   ]
 
   @type state :: %{
-          required(:name) => atom(),
+          required(:name) => term(),
           required(:consistent_reads) => boolean(),
           required(:cas_retries) => non_neg_integer(),
           required(:backoff) => {non_neg_integer(), non_neg_integer()},
@@ -35,10 +35,6 @@ defmodule DurableServer.Backends.EKVStore do
   def normalize_opts(opts) when is_list(opts) do
     opts = Keyword.validate!(opts, @valid_state_opts)
     name = Keyword.fetch!(opts, :name)
-
-    unless is_atom(name) do
-      raise ArgumentError, "EKV backend :name must be an atom, got: #{inspect(name)}"
-    end
 
     cas_retries = Keyword.get(opts, :cas_retries, @default_cas_retries)
 
@@ -654,7 +650,7 @@ defmodule DurableServer.Backends.EKVStore do
     end
   end
 
-  defp fetch_config(state, name) when is_atom(name) do
+  defp fetch_config(state, name) do
     try do
       {:ok, ekv_get_config(state, name)}
     rescue

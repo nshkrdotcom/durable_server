@@ -198,9 +198,9 @@ defmodule DurableServer.ObjectStore do
   This is a convenience function that combines create_bucket/1 and generate_bucket_credentials/1.
 
   Returns:
-  - {:ok, %ObjectStore{} = scoped_obj_store} on success
-  - {:error, {:bucket_creation_failed, reason}} if bucket creation fails
-  - {:error, {:credential_generation_failed, reason}} if credential generation fails
+  - `{:ok, %ObjectStore{} = scoped_obj_store}` on success
+  - `{:error, {:bucket_creation_failed, reason}}` if bucket creation fails
+  - `{:error, {:credential_generation_failed, reason}}` if credential generation fails
   """
   def create_bucket_with_credentials(%__MODULE__{} = client, bucket_name) do
     # Step 1: Create the bucket
@@ -701,9 +701,9 @@ defmodule DurableServer.ObjectStore do
     - body: The content to write if claim succeeds
 
   Returns:
-    - {:ok, {:claimed, etag}} if successful
-    - {:error, :already_claimed} if key exists
-    - {:error, reason} for other failures
+    - `{:ok, {:claimed, etag}}` if successful
+    - `{:error, :already_claimed}` if key exists
+    - `{:error, reason}` for other failures
   """
   def try_claim(%__MODULE__{} = client, key, body) do
     req = new_req(client, consistent: true, headers: [{"if-none-match", "*"}])
@@ -1073,10 +1073,10 @@ defmodule DurableServer.ObjectStore do
   - `:task_supervisor` - Task supervisor for async operations (default: uses client.task_supervisor)
 
   ## Returns:
-  - {:ok, %{etag: etag, body: body}} on successful update
-  - {:error, :not_found} if the key doesn't exist
-  - {:error, :max_retries_exceeded} if retries are exhausted
-  - {:error, reason} for other failures
+  - `{:ok, %{etag: etag, body: body}}` on successful update
+  - `{:error, :not_found}` if the key doesn't exist
+  - `{:error, :max_retries_exceeded}` if retries are exhausted
+  - `{:error, reason}` for other failures
 
   ## Examples
 

@@ -60,7 +60,7 @@ defmodule DurableServer.SingleflightGuard do
 
   def release(nil), do: :ok
 
-  def release({table, guard_key}) when is_atom(table) do
+  def release({table, guard_key}) do
     now = System.monotonic_time(:millisecond)
     _count = decrement_count(table, guard_key, now)
 
@@ -82,21 +82,13 @@ defmodule DurableServer.SingleflightGuard do
 
   @impl true
   def init(supervisor_name) when is_atom(supervisor_name) do
-    table = table_name(supervisor_name)
-
-    case :ets.whereis(table) do
-      :undefined ->
-        :ets.new(table, [
-          :named_table,
-          :set,
-          :public,
-          read_concurrency: true,
-          write_concurrency: true
-        ])
-
-      _ ->
-        :ok
-    end
+    table =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :singleflight_waiter_guard, [
+        :set,
+        :public,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
 
     schedule_sweep()
     {:ok, %{table: table}}
@@ -113,7 +105,7 @@ defmodule DurableServer.SingleflightGuard do
     Process.send_after(self(), :sweep, @sweep_interval_ms)
   end
 
-  defp decrement_count(table, guard_key, now) when is_atom(table) do
+  defp decrement_count(table, guard_key, now) do
     :ets.update_counter(
       table,
       guard_key,
@@ -122,7 +114,7 @@ defmodule DurableServer.SingleflightGuard do
     )
   end
 
-  defp cooldown_open?(table, guard_key, now) when is_atom(table) and is_integer(now) do
+  defp cooldown_open?(table, guard_key, now) when is_integer(now) do
     case :ets.lookup(table, guard_key) do
       [{^guard_key, 0, cooldown_until, _updated_at}] when cooldown_until <= now ->
         :ets.delete(table, guard_key)
@@ -200,12 +192,12 @@ defmodule DurableServer.SingleflightGuard do
 
   defp waiter_count(supervisor_name, singleflight_key) when is_atom(supervisor_name) do
     waiters_registry = waiters_registry_name(supervisor_name)
-    Registry.count_match(waiters_registry, singleflight_key, :_)
+    Registry.count_match(waiters_registry, {supervisor_name, singleflight_key}, :_)
   rescue
     _ -> 0
   end
 
-  defp sweep_table(table) when is_atom(table) do
+  defp sweep_table(table) do
     now = System.monotonic_time(:millisecond)
     stale_cutoff = now - @stale_entry_ttl_ms
 
@@ -239,14 +231,15 @@ defmodule DurableServer.SingleflightGuard do
   defp guard_key(singleflight_key), do: singleflight_key
 
   defp table_name(supervisor_name) do
-    :"durable_sf_waiter_guard_#{supervisor_name}"
+    DurableServer.RuntimeNames.table!(supervisor_name, :singleflight_waiter_guard)
   end
 
   defp process_name(supervisor_name) do
-    :"durable_sf_guard_#{supervisor_name}"
+    DurableServer.RuntimeNames.process_name(supervisor_name, :singleflight_guard)
   end
 
   defp waiters_registry_name(supervisor_name) do
-    :"durable_sf_waiters_#{supervisor_name}"
+    _ = supervisor_name
+    DurableServer.RuntimeNames.singleflight_waiters_registry()
   end
 end

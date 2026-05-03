@@ -273,7 +273,7 @@ defmodule DurableServer.Supervisor do
   """
   def ready?(supervisor_name) when is_atom(supervisor_name) do
     Process.whereis(supervisor_name) != nil and
-      Process.whereis(LifecycleManager.name(supervisor_name)) != nil
+      GenServer.whereis(LifecycleManager.name(supervisor_name)) != nil
   end
 
   @doc """
@@ -2136,8 +2136,9 @@ defmodule DurableServer.Supervisor do
               is_function(fun, 0) do
     owner_registry = ensure_started_singleflight_registry_name(supervisor)
     waiters_registry = ensure_started_singleflight_waiters_registry_name(supervisor)
+    registry_key = ensure_started_singleflight_registry_key(supervisor, singleflight_key)
 
-    case Registry.register(owner_registry, singleflight_key, :singleflight_owner) do
+    case Registry.register(owner_registry, registry_key, :singleflight_owner) do
       {:ok, _owner_pid} ->
         report_placement_diagnostic(supervisor, :ensure_started_singleflight_leader)
 
@@ -2146,13 +2147,14 @@ defmodule DurableServer.Supervisor do
 
           dispatch_ensure_started_singleflight_result(
             waiters_registry,
+            registry_key,
             singleflight_key,
             result
           )
 
           {:result, result}
         after
-          safe_registry_unregister(owner_registry, singleflight_key)
+          safe_registry_unregister(owner_registry, registry_key)
         end
 
       {:error, {:already_registered, owner_pid}} ->
@@ -2162,6 +2164,7 @@ defmodule DurableServer.Supervisor do
           supervisor,
           owner_registry,
           waiters_registry,
+          registry_key,
           singleflight_key,
           owner_pid,
           wait_timeout_ms
@@ -2177,6 +2180,7 @@ defmodule DurableServer.Supervisor do
          supervisor,
          owner_registry,
          waiters_registry,
+         registry_key,
          singleflight_key,
          owner_pid,
          wait_timeout_ms
@@ -2201,7 +2205,7 @@ defmodule DurableServer.Supervisor do
             try do
               case Registry.register(
                      waiters_registry,
-                     singleflight_key,
+                     registry_key,
                      {waiter_ref, reply_alias}
                    ) do
                 {:ok, _} ->
@@ -2223,7 +2227,7 @@ defmodule DurableServer.Supervisor do
                         :ensure_started_singleflight_wait_timeout
                       )
 
-                      case Registry.lookup(owner_registry, singleflight_key) do
+                      case Registry.lookup(owner_registry, registry_key) do
                         [] ->
                           :retry
 
@@ -2243,7 +2247,7 @@ defmodule DurableServer.Supervisor do
               :erlang.unalias(reply_alias)
               flush_singleflight_done(singleflight_key, waiter_ref)
               Process.demonitor(monitor_ref, [:flush])
-              safe_registry_unregister(waiters_registry, singleflight_key)
+              safe_registry_unregister(waiters_registry, registry_key)
               SingleflightGuard.release(guard_ref)
             end
 
@@ -2253,6 +2257,7 @@ defmodule DurableServer.Supervisor do
                 supervisor,
                 owner_registry,
                 waiters_registry,
+                registry_key,
                 singleflight_key,
                 new_owner_pid,
                 wait_timeout_ms
@@ -2267,9 +2272,14 @@ defmodule DurableServer.Supervisor do
     ArgumentError -> :retry
   end
 
-  defp dispatch_ensure_started_singleflight_result(waiters_registry, singleflight_key, result)
+  defp dispatch_ensure_started_singleflight_result(
+         waiters_registry,
+         registry_key,
+         singleflight_key,
+         result
+       )
        when is_atom(waiters_registry) do
-    Registry.dispatch(waiters_registry, singleflight_key, fn entries ->
+    Registry.dispatch(waiters_registry, registry_key, fn entries ->
       Enum.each(entries, fn {_pid, {waiter_ref, reply_alias}} ->
         send(reply_alias, {:singleflight_done, singleflight_key, waiter_ref, result})
       end)
@@ -2778,12 +2788,13 @@ defmodule DurableServer.Supervisor do
   end
 
   def get_dynamic_supervisor(supervisor) do
-    :"#{supervisor}_dynamic"
+    DurableServer.RuntimeNames.process_name(supervisor, :dynamic_supervisor)
   end
 
   @doc false
   def presence_pg_scope(sup_name) when is_atom(sup_name) do
-    :"#{sup_name}_durable_server_supervisor_pg_scope"
+    _ = sup_name
+    DurableServer.PG
   end
 
   @doc false
@@ -2808,7 +2819,7 @@ defmodule DurableServer.Supervisor do
   end
 
   def get_task_supervisor(supervisor) do
-    :"#{supervisor}_task_sup"
+    DurableServer.RuntimeNames.process_name(supervisor, :task_supervisor)
   end
 
   @impl Supervisor
@@ -3034,8 +3045,12 @@ defmodule DurableServer.Supervisor do
     end
 
     # create ets table for config and node_ref storage (cleaned up when supervisor dies)
-    table_name = ets_table_name(name)
-    ^table_name = :ets.new(table_name, [:named_table, :set, :public, read_concurrency: true])
+    table_name =
+      DurableServer.RuntimeNames.new_table!(name, :supervisor_config, [
+        :set,
+        :public,
+        read_concurrency: true
+      ])
 
     # generate and store node_ref in ets
     node_ref = System.system_time(:microsecond)
@@ -3111,7 +3126,6 @@ defmodule DurableServer.Supervisor do
     task_sup_name = get_task_supervisor(name)
 
     shutdown_timeout = config.supervisor_shutdown_timeout_ms
-    presence_scope = presence_pg_scope(name)
 
     group_opts =
       opts
@@ -3126,11 +3140,7 @@ defmodule DurableServer.Supervisor do
     children =
       backend_resources.managed_children ++
         [
-          %{id: presence_scope, start: {:pg, :start_link, [presence_scope]}},
           {Group, group_opts},
-          {Registry, keys: :unique, name: ensure_started_singleflight_registry_name(name)},
-          {Registry,
-           keys: :duplicate, name: ensure_started_singleflight_waiters_registry_name(name)},
           {SingleflightGuard, supervisor_name: name},
           {Task.Supervisor, name: task_sup_name},
           {DynamicSupervisor,
@@ -3243,7 +3253,7 @@ defmodule DurableServer.Supervisor do
   end
 
   defp ets_table_name(supervisor_name) do
-    :"durable_supervisor_#{supervisor_name}"
+    DurableServer.RuntimeNames.table!(supervisor_name, :supervisor_config)
   end
 
   defp build_backend_resources(opts, finch, task_sup) do
@@ -3382,7 +3392,9 @@ defmodule DurableServer.Supervisor do
     case Keyword.fetch(managed_child_opts, :data_dir) do
       {:ok, data_dir} ->
         base_name = Keyword.fetch!(managed_child_opts, :name)
-        heartbeat_name = :"#{base_name}_heartbeats"
+
+        heartbeat_name =
+          DurableServer.RuntimeNames.process_name(base_name, :managed_ekv_heartbeats)
 
         heartbeat_child_opts =
           managed_child_opts
@@ -3533,11 +3545,17 @@ defmodule DurableServer.Supervisor do
   defp maybe_extract_object_store(_), do: nil
 
   defp ensure_started_singleflight_registry_name(supervisor_name) do
-    :"durable_sf_owner_#{supervisor_name}"
+    _ = supervisor_name
+    DurableServer.RuntimeNames.singleflight_owner_registry()
   end
 
   defp ensure_started_singleflight_waiters_registry_name(supervisor_name) do
-    :"durable_sf_waiters_#{supervisor_name}"
+    _ = supervisor_name
+    DurableServer.RuntimeNames.singleflight_waiters_registry()
+  end
+
+  defp ensure_started_singleflight_registry_key(supervisor_name, singleflight_key) do
+    {supervisor_name, singleflight_key}
   end
 
   defp extract_capacity_limits(opts) do
@@ -3660,15 +3678,33 @@ defmodule DurableServer.Supervisor do
               "sticky_placement delays for #{inspect(module)} must be non-negative integers, got: #{inspect(delay)} for #{inspect(env_var_atom)}"
       end
 
-      # Validate env var (convert atom to string and check)
-      env_var_str = Atom.to_string(env_var_atom)
-
-      unless env_var_atom == :any or String.match?(env_var_str, ~r/^[A-Z][A-Z0-9_]*$/) do
+      unless env_var_atom == :any or valid_env_var_atom?(env_var_atom) do
         raise ArgumentError,
               "sticky_placement env var for #{inspect(module)} should be an uppercase env var like FLY_MACHINE_ID or :any, got: #{inspect(env_var_atom)}"
       end
     end)
   end
+
+  defp valid_env_var_atom?(env_var_atom) when is_atom(env_var_atom) do
+    env_var_atom
+    |> Atom.to_string()
+    |> valid_env_var_name?()
+  end
+
+  defp valid_env_var_name?(<<first, rest::binary>>) when first in ?A..?Z do
+    valid_env_var_rest?(rest)
+  end
+
+  defp valid_env_var_name?(_), do: false
+
+  defp valid_env_var_rest?(<<>>), do: true
+
+  defp valid_env_var_rest?(<<char, rest::binary>>)
+       when char in ?A..?Z or char in ?0..?9 or char == ?_ do
+    valid_env_var_rest?(rest)
+  end
+
+  defp valid_env_var_rest?(_), do: false
 
   defp extract_heartbeat_meta_config(opts) do
     case Keyword.get(opts, :heartbeat_meta) do

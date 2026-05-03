@@ -92,14 +92,14 @@ defmodule DurableServer.MirrorBackendE2ETest do
     supervisor_name = unique_supervisor_name("shadow_boot_fail")
     missing_ekv_name = :"missing_ekv_#{System.unique_integer([:positive, :monotonic])}"
 
-    assert_raise RuntimeError, ~r/failed to start child with the spec/, fn ->
+    assert_raise_message_contains(RuntimeError, "failed to start child with the spec", fn ->
       start_durable_supervisor!(
         {:shadow_boot_fail, supervisor_name},
         supervisor_name,
         context.prefix,
         strict_shadow_backend_spec(context.object_store, missing_ekv_name)
       )
-    end
+    end)
   end
 
   test "strict phase 1 write fails when mirrored EKV write fails", context do

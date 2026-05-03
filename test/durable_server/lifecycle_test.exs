@@ -10,7 +10,7 @@ defmodule DurableServer.LifecycleTest do
 
   def atomify_keys(map) when is_map(map) do
     Map.new(map, fn
-      {k, v} when is_binary(k) -> {String.to_atom(k), atomify_keys(v)}
+      {k, v} when is_binary(k) -> {bounded_test_state_key(k), atomify_keys(v)}
       {k, v} -> {k, atomify_keys(v)}
     end)
   end
@@ -20,6 +20,12 @@ defmodule DurableServer.LifecycleTest do
   end
 
   def atomify_keys(other), do: other
+
+  defp bounded_test_state_key("count"), do: :count
+  defp bounded_test_state_key("permanent"), do: :permanent
+  defp bounded_test_state_key("terminate_delay_ms"), do: :terminate_delay_ms
+  defp bounded_test_state_key("notify_pid"), do: :notify_pid
+  defp bounded_test_state_key(key), do: key
 
   defmodule TestServer do
     use DurableServer,
@@ -774,7 +780,7 @@ defmodule DurableServer.LifecycleTest do
                  heartbeat_data
                )
 
-      heartbeat_table = :"durable_server_heartbeats_#{supervisor_name}"
+      heartbeat_table = DurableServer.RuntimeNames.table!(supervisor_name, :heartbeats)
       stale_timestamp = now - 60_000
       :ets.insert(heartbeat_table, {node_str, node_ref, stale_timestamp, %{}, %{}, %{}, nil})
 
@@ -1479,9 +1485,12 @@ defmodule DurableServer.LifecycleTest do
     standalone_supervisor_name =
       :"#{base_supervisor_name}_standalone_#{DurableServer.UUID.uuid4()}"
 
-    # Create ETS table for standalone supervisor
-    table_name = :"durable_supervisor_#{standalone_supervisor_name}"
-    ^table_name = :ets.new(table_name, [:named_table, :set, :public, read_concurrency: true])
+    table_name =
+      DurableServer.RuntimeNames.new_table!(standalone_supervisor_name, :supervisor_config, [
+        :set,
+        :public,
+        read_concurrency: true
+      ])
 
     config = %{config | name: standalone_supervisor_name, ets_table: table_name}
 
@@ -1503,10 +1512,10 @@ defmodule DurableServer.LifecycleTest do
     circuit_breaker = CircuitBreaker.new(standalone_supervisor_name, circuit_breaker_config)
 
     # Create TaskSupervisor for standalone testing
-    task_sup_name = :"#{standalone_supervisor_name}_task_sup"
+    task_sup_name =
+      DurableServer.RuntimeNames.process_name(standalone_supervisor_name, :task_supervisor)
+
     _ = start_supervised!({Task.Supervisor, name: task_sup_name})
-    presence_scope = DurableServer.Supervisor.presence_pg_scope(standalone_supervisor_name)
-    _ = start_supervised!(%{id: presence_scope, start: {:pg, :start_link, [presence_scope]}})
 
     # Start LifecycleManager with the standalone supervisor name
     manager_opts =
@@ -1554,40 +1563,54 @@ defmodule DurableServer.LifecycleTest do
   end
 
   defp setup_restart_gate_tables(supervisor_name) do
-    config_table = :"durable_supervisor_#{supervisor_name}"
-    heartbeat_table = :"durable_server_heartbeats_#{supervisor_name}"
-    restart_gate_table = :"durable_server_restart_gate_#{supervisor_name}"
+    config_table =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :supervisor_config, [
+        :set,
+        :public,
+        read_concurrency: true
+      ])
 
-    ^config_table =
-      :ets.new(config_table, [:named_table, :set, :protected, read_concurrency: true])
+    heartbeat_table =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :heartbeats, [
+        :set,
+        :public,
+        read_concurrency: true
+      ])
 
-    ^heartbeat_table =
-      :ets.new(heartbeat_table, [:named_table, :set, :public, read_concurrency: true])
-
-    ^restart_gate_table =
-      :ets.new(restart_gate_table, [
-        :named_table,
+    restart_gate_table =
+      DurableServer.RuntimeNames.new_table!(supervisor_name, :restart_gate, [
         :set,
         :public,
         read_concurrency: true,
         write_concurrency: true
       ])
 
+    :ets.insert(config_table, {:config, restart_gate_test_config()})
     :ets.insert(config_table, {:sticky_placement_config, %{per_module: %{}, default: nil}})
 
     on_exit(fn ->
-      if :ets.whereis(heartbeat_table) != :undefined do
+      if DurableServer.RuntimeNames.table_alive?(heartbeat_table) do
         :ets.delete(heartbeat_table)
       end
 
-      if :ets.whereis(config_table) != :undefined do
+      if DurableServer.RuntimeNames.table_alive?(config_table) do
         :ets.delete(config_table)
       end
 
-      if :ets.whereis(restart_gate_table) != :undefined do
+      if DurableServer.RuntimeNames.table_alive?(restart_gate_table) do
         :ets.delete(restart_gate_table)
       end
     end)
+  end
+
+  defp restart_gate_test_config do
+    %{
+      heartbeat_staleness_threshold_ms: 30_000,
+      restart_claim_preferred_fanout: 2,
+      restart_claim_expanded_fanout: 4,
+      restart_claim_gate_expand_after_ms: :timer.seconds(30),
+      restart_claim_gate_disable_after_ms: :timer.minutes(2)
+    }
   end
 
   describe "lifecycle manager edge cases" do
@@ -1626,7 +1649,7 @@ defmodule DurableServer.LifecycleTest do
         :"gate-e@test"
       ]
 
-      heartbeat_table = :"durable_server_heartbeats_#{supervisor_name}"
+      heartbeat_table = DurableServer.RuntimeNames.table!(supervisor_name, :heartbeats)
 
       Enum.with_index(nodes, 1)
       |> Enum.each(fn {node, idx} ->
@@ -1655,7 +1678,8 @@ defmodule DurableServer.LifecycleTest do
             base_meta,
             local_node: node,
             now: now,
-            gate_first_seen_at: now
+            gate_first_seen_at: now,
+            known_nodes: nodes
           )
         end)
 
@@ -1666,7 +1690,8 @@ defmodule DurableServer.LifecycleTest do
             base_meta,
             local_node: node,
             now: now,
-            gate_first_seen_at: now - :timer.seconds(45)
+            gate_first_seen_at: now - :timer.seconds(45),
+            known_nodes: nodes
           )
         end)
 
@@ -1677,7 +1702,8 @@ defmodule DurableServer.LifecycleTest do
             base_meta,
             local_node: node,
             now: now,
-            gate_first_seen_at: now - :timer.minutes(3)
+            gate_first_seen_at: now - :timer.minutes(3),
+            known_nodes: nodes
           )
         end)
 
@@ -1691,7 +1717,7 @@ defmodule DurableServer.LifecycleTest do
       setup_restart_gate_tables(supervisor_name)
 
       now = System.system_time(:millisecond)
-      heartbeat_table = :"durable_server_heartbeats_#{supervisor_name}"
+      heartbeat_table = DurableServer.RuntimeNames.table!(supervisor_name, :heartbeats)
 
       Enum.with_index([:"gate-a@test", :"gate-b@test", :"gate-c@test"], 1)
       |> Enum.each(fn {node, idx} ->
@@ -1717,7 +1743,8 @@ defmodule DurableServer.LifecycleTest do
                supervisor_name,
                meta,
                local_node: :missing@test,
-               now: now
+               now: now,
+               known_nodes: [:"gate-a@test", :"gate-b@test", :"gate-c@test"]
              )
     end
 
@@ -1726,7 +1753,7 @@ defmodule DurableServer.LifecycleTest do
       setup_restart_gate_tables(supervisor_name)
 
       now = System.system_time(:millisecond)
-      heartbeat_table = :"durable_server_heartbeats_#{supervisor_name}"
+      heartbeat_table = DurableServer.RuntimeNames.table!(supervisor_name, :heartbeats)
 
       nodes = [
         :"gate-a@test",
@@ -1763,7 +1790,8 @@ defmodule DurableServer.LifecycleTest do
             meta,
             local_node: node,
             now: now,
-            gate_first_seen_at: now
+            gate_first_seen_at: now,
+            known_nodes: nodes
           )
         end)
 
@@ -1776,7 +1804,8 @@ defmodule DurableServer.LifecycleTest do
             now: now,
             gate_first_seen_at: now,
             local_candidate_batch_size: 5,
-            local_tail_bypass_threshold: 10
+            local_tail_bypass_threshold: 10,
+            known_nodes: nodes
           )
         end)
 
