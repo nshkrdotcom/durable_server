@@ -539,7 +539,7 @@ defmodule DurableServer do
   require Logger
 
   alias DurableServer
-  alias DurableServer.{LifecycleManager, CircuitBreaker, StoredState, Meta}
+  alias DurableServer.{CircuitBreaker, GovernedAuthority, LifecycleManager, Meta, StoredState}
   alias DurableServer.ObjectStore
   alias DurableServer.StorageBackend
 
@@ -819,7 +819,8 @@ defmodule DurableServer do
             user_initiated_stop: nil,
             start_time: nil,
             sticky_placement_history: [],
-            sticky_placement_history_limit: 5
+            sticky_placement_history_limit: 5,
+            governed_authority: nil
 
   @type user_stop_reason ::
           nil
@@ -995,7 +996,8 @@ defmodule DurableServer do
       init_from_ref: from_ref,
       init_from_pid: from_pid,
       init_reply_to: reply_to,
-      sticky_placement_history_limit: sticky_placement_history_limit
+      sticky_placement_history_limit: sticky_placement_history_limit,
+      governed_authority: Map.get(config, :governed_authority)
     }
 
     bootstrap = %{
@@ -1085,20 +1087,24 @@ defmodule DurableServer do
     if Keyword.get(opts, :consistent, false) do
       case fetch_stored_state(store, %{key: key, prefix: prefix}, opts) do
         {:ok, %StoredState{} = existing_raw_data} -> {:ok, existing_raw_data}
+        {:error, %ArgumentError{} = reason} -> {:error, reason}
         {:error, _reason} -> :error
       end
     else
       case boot_info_preloaded_object(boot_info) do
         %{body: %StoredState{} = stored_state, etag: etag} ->
-          {:ok,
-           attach_stored_state_context(%{stored_state | etag: etag}, %{
-             key: key,
-             prefix: prefix
-           })}
+          stored_state =
+            attach_stored_state_context(%{stored_state | etag: etag}, %{
+              key: key,
+              prefix: prefix
+            })
+
+          validate_governed_stored_state(stored_state, Keyword.get(opts, :governed_authority))
 
         _ ->
           case fetch_stored_state(store, %{key: key, prefix: prefix}, opts) do
             {:ok, %StoredState{} = existing_raw_data} -> {:ok, existing_raw_data}
+            {:error, %ArgumentError{} = reason} -> {:error, reason}
             {:error, _reason} -> :error
           end
       end
@@ -1123,7 +1129,7 @@ defmodule DurableServer do
               map_size(preloaded) == 2,
        do: preloaded
 
-  defp load_fresh_init_state(module, init_arg, object_store) do
+  defp load_fresh_init_state(module, init_arg, object_store, governed_authority) do
     initial_state = Keyword.fetch!(init_arg, :initial_state)
 
     with dumped_init_state <-
@@ -1133,14 +1139,19 @@ defmodule DurableServer do
          {:ok, encoded_init_state} <-
            StorageBackend.encode(object_store, dumped_init_state),
          {:ok, client_init_state} <-
-           StorageBackend.decode(object_store, encoded_init_state) do
+           StorageBackend.decode(object_store, encoded_init_state),
+         :ok <- validate_governed_recovered_state(client_init_state, governed_authority) do
       loaded_user_state = load_user_state(module, _old_vsn = nil, client_init_state)
       {:ok, {loaded_user_state, _old_vsn = nil, _etag = nil, _meta = nil}}
     end
   end
 
-  defp reread_expired_state(%StorageBackend{} = store, %{key: _key, prefix: _prefix} = request) do
-    case fetch_stored_state(store, request, consistent: true) do
+  defp reread_expired_state(
+         %StorageBackend{} = store,
+         %{key: _key, prefix: _prefix} = request,
+         opts
+       ) do
+    case fetch_stored_state(store, request, Keyword.put(opts, :consistent, true)) do
       {:ok, %StoredState{meta: %Meta{} = meta} = stored_state} ->
         case check_lock(meta) do
           :expired -> {:ok, stored_state}
@@ -1168,7 +1179,8 @@ defmodule DurableServer do
          circuit_breake: circuit_breaker,
          init_from: init_from,
          preloaded_boot: preloaded_boot,
-         sticky_placement_history_limit: history_limit
+         sticky_placement_history_limit: history_limit,
+         governed_authority: governed_authority
        }) do
     {init_from_ref, init_from_pid, init_reply_to} = normalize_init_from(init_from)
     config = module.__durable_server_config__()
@@ -1207,7 +1219,8 @@ defmodule DurableServer do
       init_from_pid: init_from_pid,
       init_reply_to: init_reply_to,
       sticky_placement_history: sticky_placement_history,
-      sticky_placement_history_limit: history_limit
+      sticky_placement_history_limit: history_limit,
+      governed_authority: governed_authority
     }
 
     case acquire_lock(state, meta) do
@@ -1712,13 +1725,15 @@ defmodule DurableServer do
     with :ok <- maybe_check_global_lock_circuit_breaker(circuit_breaker, preloaded_boot),
          :ok <- LifecycleManager.check_capacity(supervisor_name, module, capacity_opts) do
       current_node_str = to_string(Node.self())
+      governed_authority = Map.get(config, :governed_authority)
 
       load_result =
         case fetch_existing_state_raw(
                object_store,
                %{key: key, prefix: prefix},
                boot_info,
-               consistent: false
+               consistent: false,
+               governed_authority: governed_authority
              ) do
           {:ok, %StoredState{} = existing} ->
             %{meta: %Meta{} = meta} = existing
@@ -1737,7 +1752,11 @@ defmodule DurableServer do
                       loaded_state = load_user_state(module, existing.vsn, existing.state)
                       {:ok, {loaded_state, existing.vsn, existing.etag, meta}}
                     else
-                      case reread_expired_state(object_store, %{key: key, prefix: prefix}) do
+                      case reread_expired_state(
+                             object_store,
+                             %{key: key, prefix: prefix},
+                             governed_authority: governed_authority
+                           ) do
                         {:ok,
                          %StoredState{
                            meta: %Meta{} = current_meta,
@@ -1752,7 +1771,12 @@ defmodule DurableServer do
                           {:error, {:already_started, lock_pid}}
 
                         :error ->
-                          load_fresh_init_state(module, init_arg, object_store)
+                          load_fresh_init_state(
+                            module,
+                            init_arg,
+                            object_store,
+                            governed_authority
+                          )
 
                         {:error, reason} ->
                           {:error, reason}
@@ -1761,8 +1785,11 @@ defmodule DurableServer do
                 end
             end
 
+          {:error, reason} ->
+            {:error, reason}
+
           :error ->
-            load_fresh_init_state(module, init_arg, object_store)
+            load_fresh_init_state(module, init_arg, object_store, governed_authority)
         end
 
       case load_result do
@@ -1796,7 +1823,8 @@ defmodule DurableServer do
                    circuit_breake: circuit_breaker,
                    init_from: init_from,
                    preloaded_boot: preloaded_boot,
-                   sticky_placement_history_limit: sticky_placement_history_limit
+                   sticky_placement_history_limit: sticky_placement_history_limit,
+                   governed_authority: governed_authority
                  }) do
               {:ok, %DurableServer{} = locked_state} ->
                 info = %{
@@ -2207,12 +2235,10 @@ defmodule DurableServer do
       meta: final_dumped_meta
     }
 
-    case do_lock_object(state, data, state.supervisor) do
-      {:ok, %DurableServer{} = new_state} ->
-        {:ok, new_state}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, %StoredState{} = data} <-
+           validate_governed_stored_state(data, state.governed_authority),
+         {:ok, %DurableServer{} = new_state} <- do_lock_object(state, data, state.supervisor) do
+      {:ok, new_state}
     end
   end
 
@@ -2619,12 +2645,11 @@ defmodule DurableServer do
         meta: new_meta
       }
 
-      case put_object(new_state, storage_key(new_state), data) do
-        {:ok, %DurableServer{} = new_state} ->
-          {:ok, %{new_state | status: meta_overrides[:status] || new_state.status}}
-
-        {:error, reason} ->
-          {:error, reason}
+      with {:ok, %StoredState{} = data} <-
+             validate_governed_stored_state(data, new_state.governed_authority),
+           {:ok, %DurableServer{} = new_state} <-
+             put_object(new_state, storage_key(new_state), data) do
+        {:ok, %{new_state | status: meta_overrides[:status] || new_state.status}}
       end
     else
       {:ok, new_state}
@@ -2657,7 +2682,10 @@ defmodule DurableServer do
                    |> Map.put(:state, dumped_user_state)
                    |> Map.put(:meta, repaired_meta)
 
-                 {:ok, updated_data}
+                 case validate_governed_stored_state(updated_data, state.governed_authority) do
+                   {:ok, %StoredState{} = updated_data} -> {:ok, updated_data}
+                   {:error, reason} -> {:error, reason}
+                 end
                else
                  {:error, :ownership_mismatch}
                end
@@ -2713,7 +2741,11 @@ defmodule DurableServer do
 
   def fetch_stored_state(supervisor_name, %{key: key, prefix: prefix}, opts)
       when is_atom(supervisor_name) do
-    %{storage_backend: storage_backend} = DurableServer.Supervisor.__get_config__(supervisor_name)
+    %{storage_backend: storage_backend} =
+      config =
+      DurableServer.Supervisor.__get_config__(supervisor_name)
+
+    opts = Keyword.put_new(opts, :governed_authority, Map.get(config, :governed_authority))
     fetch_stored_state(storage_backend, %{key: key, prefix: prefix}, opts)
   end
 
@@ -2723,12 +2755,15 @@ defmodule DurableServer do
   end
 
   def fetch_stored_state(%StorageBackend{} = store, %{key: key, prefix: prefix}, opts) do
-    opts = Keyword.validate!(opts, [:consistent])
+    opts = Keyword.validate!(opts, [:consistent, :governed_authority])
+    {governed_authority, storage_opts} = Keyword.pop(opts, :governed_authority)
 
-    case StorageBackend.get_object(store, prefix <> key, opts) do
+    case StorageBackend.get_object(store, prefix <> key, storage_opts) do
       {:ok, %{body: %StoredState{} = stored_state, etag: etag}} ->
-        {:ok,
-         attach_stored_state_context(%{stored_state | etag: etag}, %{key: key, prefix: prefix})}
+        stored_state =
+          attach_stored_state_context(%{stored_state | etag: etag}, %{key: key, prefix: prefix})
+
+        validate_governed_stored_state(stored_state, governed_authority)
 
       {:ok, %{body: other}} ->
         {:error, {:unexpected_value_type, other}}
@@ -2980,7 +3015,8 @@ defmodule DurableServer do
                prefix: state.prefix
              },
              %{},
-             consistent: true
+             consistent: true,
+             governed_authority: state.governed_authority
            ) do
         {:ok, %StoredState{meta: %Meta{} = meta}} ->
           # increment global lock failure - we found a lock in storage but never saw it in syn
@@ -2990,6 +3026,9 @@ defmodule DurableServer do
 
         :error ->
           {:error, {:already_started, :noproc}}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       case DurableServer.Supervisor.lookup(state.supervisor, state.key) do
@@ -3136,6 +3175,22 @@ defmodule DurableServer do
         prefix: prefix,
         meta: %{meta | key: key, prefix: prefix}
     }
+  end
+
+  defp validate_governed_stored_state(%StoredState{} = stored_state, nil), do: {:ok, stored_state}
+
+  defp validate_governed_stored_state(%StoredState{} = stored_state, governed_authority) do
+    {:ok, GovernedAuthority.validate_stored_state!(governed_authority, stored_state)}
+  rescue
+    error in [ArgumentError] -> {:error, error}
+  end
+
+  defp validate_governed_recovered_state(_state, nil), do: :ok
+
+  defp validate_governed_recovered_state(state, governed_authority) do
+    GovernedAuthority.validate_recovered!(governed_authority, state, ["state"])
+  rescue
+    error in [ArgumentError] -> {:error, error}
   end
 
   defp validate_dumped_state!(dumped_state, module) when is_atom(module) do

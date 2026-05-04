@@ -101,7 +101,7 @@ defmodule DurableServer.LifecycleManager do
 
   alias DurableServer.LifecycleManager
   alias DurableServer
-  alias DurableServer.{StoredState, Meta, CircuitBreaker}
+  alias DurableServer.{CircuitBreaker, GovernedAuthority, Meta, StoredState}
   alias DurableServer.ObjectStore
   alias DurableServer.StorageBackend
 
@@ -993,6 +993,9 @@ defmodule DurableServer.LifecycleManager do
       |> Enum.map(fn var_name -> {var_name, System.get_env(var_name)} end)
       |> Enum.into(%{})
 
+    governed_authority = Map.get(state.config, :governed_authority)
+    GovernedAuthority.validate_heartbeat_env_vars!(governed_authority, env_vars)
+
     # resolve heartbeat_meta (can be a map or a function that returns a map)
     # and add a draining marker while this supervisor is shutting down.
     heartbeat_meta =
@@ -1000,6 +1003,8 @@ defmodule DurableServer.LifecycleManager do
       |> resolve_heartbeat_meta()
       |> maybe_apply_placement_region(state.config)
       |> maybe_mark_draining(state.supervisor_name)
+
+    GovernedAuthority.validate_heartbeat_meta!(governed_authority, heartbeat_meta)
 
     heartbeat_data =
       %{
@@ -1126,7 +1131,7 @@ defmodule DurableServer.LifecycleManager do
 
   defp maybe_mark_draining(heartbeat_meta, supervisor_name) when is_atom(supervisor_name) do
     if supervisor_shutting_down?(supervisor_name) do
-      (heartbeat_meta || %{}) |> Map.put("draining", true)
+      Map.put(heartbeat_meta, "draining", true)
     else
       heartbeat_meta
     end

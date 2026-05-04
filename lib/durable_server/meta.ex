@@ -1,4 +1,6 @@
 defmodule DurableServer.Meta do
+  @moduledoc false
+
   # represents the object metadata in storage
   alias DurableServer.Meta
 
@@ -23,6 +25,30 @@ defmodule DurableServer.Meta do
             restart_attempt_ttl: nil,
             init_from_ref: nil,
             init_from_pid: nil
+
+  @type t :: %__MODULE__{
+          vsn: pos_integer(),
+          module: module() | nil,
+          permanent: boolean(),
+          pid: pid() | nil,
+          status: atom(),
+          key: String.t() | nil,
+          prefix: String.t() | nil,
+          sticky_placement: term(),
+          sticky_placement_history: list(),
+          supervisor: atom() | nil,
+          task_supervisor: atom() | nil,
+          dynamic_supervisor: atom() | nil,
+          node_ref: term(),
+          node_str: String.t() | nil,
+          last_heartbeat_at: integer() | nil,
+          crash_history: list(),
+          restart_attempt_node: String.t() | nil,
+          restart_attempt_time: integer() | nil,
+          restart_attempt_ttl: integer() | nil,
+          init_from_ref: reference() | nil,
+          init_from_pid: pid() | nil
+        }
 
   @stopped_graceful :stopped_graceful
   @stopped_permanent :stopped_permanent

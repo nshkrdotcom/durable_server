@@ -46,6 +46,8 @@ defmodule DurableServer.MixProject do
       {:req_s3, "~> 0.2"},
       {:finch, "~> 0.18"},
       {:sweet_xml, "~> 0.7"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.30", only: :dev, runtime: false},
       {:ekv, "~> 0.4.0", optional: true}
     ]

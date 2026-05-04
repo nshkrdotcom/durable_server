@@ -204,12 +204,13 @@ defmodule DurableServer.Supervisor do
   alias DurableServer
 
   alias DurableServer.{
-    LifecycleManager,
-    Terminator,
     CircuitBreaker,
+    GovernedAuthority,
+    LifecycleManager,
     Meta,
     SingleflightGuard,
-    StoredState
+    StoredState,
+    Terminator
   }
 
   alias DurableServer.ObjectStore
@@ -2869,6 +2870,7 @@ defmodule DurableServer.Supervisor do
         :sticky_placement,
         :default_sticky_placement,
         :heartbeat_meta,
+        :governed_authority,
         :placement_region,
         :placement_erpc_timeout_same_region_ms,
         :placement_erpc_timeout_cross_region_ms,
@@ -3006,11 +3008,15 @@ defmodule DurableServer.Supervisor do
     # Extract and validate capacity limits
     capacity_limits = extract_capacity_limits(opts)
 
+    governed_authority = extract_governed_authority_config(opts)
+
     # Extract and validate sticky placement config
     sticky_placement_config = extract_sticky_placement_config(opts)
+    validate_governed_sticky_placement!(governed_authority, sticky_placement_config)
 
     # Extract and validate heartbeat_meta config
     heartbeat_meta = extract_heartbeat_meta_config(opts)
+    validate_governed_heartbeat_meta!(governed_authority, heartbeat_meta)
     placement_region = extract_placement_region_config(opts)
 
     {placement_erpc_timeout_same_region_ms, placement_erpc_timeout_cross_region_ms} =
@@ -3106,6 +3112,7 @@ defmodule DurableServer.Supervisor do
       placement_erpc_timeout_cross_region_ms: placement_erpc_timeout_cross_region_ms,
       max_singleflight_waiters_per_key_module: max_singleflight_waiters_per_key_module,
       circuit_breaker: circuit_breaker,
+      governed_authority: governed_authority,
       ets_table: table_name
     }
 
@@ -3705,6 +3712,47 @@ defmodule DurableServer.Supervisor do
   end
 
   defp valid_env_var_rest?(_), do: false
+
+  defp extract_governed_authority_config(opts) do
+    case Keyword.get(opts, :governed_authority) do
+      nil -> nil
+      authority -> GovernedAuthority.new!(authority)
+    end
+  end
+
+  defp validate_governed_sticky_placement!(nil, _config), do: :ok
+
+  defp validate_governed_sticky_placement!(governed_authority, %{
+         per_module: per_module,
+         default: default
+       }) do
+    env_vars =
+      Map.values(per_module)
+      |> maybe_append(default)
+      |> Enum.flat_map(fn placement ->
+        Enum.map(placement, fn
+          {:any, _delay} -> :any
+          {env_var_atom, _delay} -> Atom.to_string(env_var_atom)
+        end)
+      end)
+      |> Enum.reject(&(&1 == :any))
+      |> Enum.into(%{}, fn env_var -> {env_var, nil} end)
+
+    GovernedAuthority.validate_heartbeat_env_vars!(governed_authority, env_vars)
+  end
+
+  defp validate_governed_heartbeat_meta!(nil, _heartbeat_meta), do: :ok
+
+  defp validate_governed_heartbeat_meta!(_governed_authority, heartbeat_meta)
+       when is_function(heartbeat_meta, 0),
+       do: :ok
+
+  defp validate_governed_heartbeat_meta!(governed_authority, heartbeat_meta) do
+    GovernedAuthority.validate_heartbeat_meta!(governed_authority, heartbeat_meta)
+  end
+
+  defp maybe_append(list, nil), do: list
+  defp maybe_append(list, value), do: list ++ [value]
 
   defp extract_heartbeat_meta_config(opts) do
     case Keyword.get(opts, :heartbeat_meta) do

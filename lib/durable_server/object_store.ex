@@ -638,7 +638,6 @@ defmodule DurableServer.ObjectStore do
        }}
     else
       {:error, reason} -> {:error, reason}
-      _ -> {:error, %{errors: ["Failed to get complete policy details"]}}
     end
   end
 

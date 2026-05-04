@@ -80,6 +80,39 @@ children = [
 ]
 ```
 
+This direct environment-backed object storage setup is the standalone mode. In
+governed runtime deployments, pass durable authority refs with
+`:governed_authority` and keep raw provider tokens, service identities, cursor
+authority, leases, provider health state, and trace accumulator secret values
+out of durable state:
+
+```elixir
+{DurableServer.Supervisor,
+ name: MyDurableSup,
+ prefix: "my_app/",
+ object_store: object_store_opts,
+ governed_authority: [
+   authority_ref: "durable/prod",
+   credential_ref: "github/install/123",
+   target_ref: "repo/example/app",
+   service_identity_ref: "identity/fly-machine",
+   cursor_authority_ref: "cursor/primary",
+   lease_ref: "lease/runtime",
+   provider_health_ref: "provider-health/github",
+   trace_redaction_ref: "trace/redaction-policy"
+ ]}
+```
+
+When governed authority is configured, DurableServer validates recovered state,
+fresh initial-state round trips, and persisted node heartbeat metadata before it
+writes or rehydrates them. State should store refs such as `credential_ref`,
+`target_ref`, and `cursor_authority_ref`; direct fields such as `token`,
+`secret`, `authorization`, `service_identity`, or `target_grant` are rejected.
+Sticky-placement environment variables remain supported for standalone
+placement hints, but governed supervisors reject authority-bearing names such
+as `AWS_SECRET_ACCESS_KEY` and `API_KEY`; use non-secret placement keys such as
+`FLY_MACHINE_ID`, `FLY_REGION`, or app-local routing labels.
+
 Start and use individual servers:
 
 ```elixir
