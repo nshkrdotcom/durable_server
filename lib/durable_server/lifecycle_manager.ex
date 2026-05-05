@@ -99,11 +99,17 @@ defmodule DurableServer.LifecycleManager do
   use GenServer
   require Logger
 
-  alias DurableServer.LifecycleManager
   alias DurableServer
-  alias DurableServer.{CircuitBreaker, GovernedAuthority, Meta, StoredState}
-  alias DurableServer.ObjectStore
-  alias DurableServer.StorageBackend
+
+  alias DurableServer.{
+    CircuitBreaker,
+    GovernedAuthority,
+    LifecycleManager,
+    Meta,
+    ObjectStore,
+    StorageBackend,
+    StoredState
+  }
 
   defstruct supervisor_name: nil,
             task_sup: nil,

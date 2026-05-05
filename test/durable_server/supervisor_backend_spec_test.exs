@@ -4,9 +4,9 @@ defmodule DurableServer.SupervisorBackendSpecTest do
   import ExUnit.CaptureLog
   import DurableServer.TestHelper
 
-  alias DurableServer.LifecycleManager
   alias DurableServer.Backends.EKVStore
   alias DurableServer.Backends.MirrorStore
+  alias DurableServer.LifecycleManager
   alias DurableServer.StorageBackend
 
   def throw_not_ready do

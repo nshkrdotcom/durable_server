@@ -1,9 +1,9 @@
 defmodule DurableServer.MirrorBackendIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias DurableServer.StorageBackend
   alias DurableServer.Backends.EKVStore
   alias DurableServer.Backends.MirrorStore
+  alias DurableServer.StorageBackend
 
   defmodule RejectingPutBackend do
     @behaviour DurableServer.StorageBackend

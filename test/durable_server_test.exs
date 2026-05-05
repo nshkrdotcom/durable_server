@@ -3,12 +3,12 @@ defmodule DurableServerTest do
   import DurableServer.TestHelper
 
   alias DurableServer
+  alias DurableServer.Backends.ObjectStore, as: ObjectStoreBackend
   alias DurableServer.CircuitBreaker
   alias DurableServer.LifecycleManager
-  alias DurableServer.StoredState
   alias DurableServer.ObjectStore
-  alias DurableServer.Backends.ObjectStore, as: ObjectStoreBackend
   alias DurableServer.StorageBackend
+  alias DurableServer.StoredState
   alias DurableServer.TestTemporalServer
   alias DurableServerTest.EdgeCaseTestServer
   alias DurableServerTest.ValidatorTestServer
@@ -142,8 +142,8 @@ defmodule DurableServerTest do
   defmodule RejectingStartupSyncBackend do
     @behaviour DurableServer.StorageBackend
 
-    alias DurableServer.StorageBackend
     alias DurableServer.Backends.ObjectStore, as: ObjectStoreBackend
+    alias DurableServer.StorageBackend
 
     @impl true
     def init_backend(opts) when is_list(opts) do
@@ -2595,9 +2595,9 @@ defmodule DurableServerTest do
       current_time = System.system_time(:millisecond)
 
       # Create crash entries to simulate repeated crashes
-      crash_entry1 = %{timestamp: current_time - 30000, reason: "crash 1", node_ref: "test_node"}
-      crash_entry2 = %{timestamp: current_time - 20000, reason: "crash 2", node_ref: "test_node"}
-      crash_entry3 = %{timestamp: current_time - 10000, reason: "crash 3", node_ref: "test_node"}
+      crash_entry1 = %{timestamp: current_time - 30_000, reason: "crash 1", node_ref: "test_node"}
+      crash_entry2 = %{timestamp: current_time - 20_000, reason: "crash 2", node_ref: "test_node"}
+      crash_entry3 = %{timestamp: current_time - 10_000, reason: "crash 3", node_ref: "test_node"}
 
       fake_metadata = %{crash_history: []}
 
@@ -3811,7 +3811,7 @@ defmodule DurableServerTest do
         ]
         |> Enum.map(&Task.await(&1, 20_000))
 
-      assert Enum.count(restart_results, &match?({:ok, {_pid, _meta}}, &1)) >= 1
+      assert Enum.any?(restart_results, &match?({:ok, {_pid, _meta}}, &1))
 
       assert Enum.all?(restart_results, fn
                {:ok, {_pid, _meta}} ->

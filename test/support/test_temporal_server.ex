@@ -1,4 +1,6 @@
 defmodule DurableServer.TestTemporalServer do
+  @moduledoc false
+
   use DurableServer, vsn: 1
 
   def dump_state(state) do

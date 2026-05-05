@@ -1894,7 +1894,7 @@ defmodule DurableServer.LifecycleTest do
       full_config = Map.merge(config, %{prefix: "test/"})
 
       defmodule DurableServer.LifecycleTest.MockRegionNodeModule do
-        def self(), do: :test_node@test
+        def self, do: :test_node@test
         def ping(:unreachable@test), do: :pang
         def ping(_), do: :pong
       end

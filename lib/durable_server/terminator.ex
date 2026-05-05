@@ -153,23 +153,21 @@ defmodule DurableServer.Terminator do
   end
 
   defp get_durable_server_children(supervisor_name) do
-    try do
-      dynamic_sup_name = DurableServer.Supervisor.get_dynamic_supervisor(supervisor_name)
+    dynamic_sup_name = DurableServer.Supervisor.get_dynamic_supervisor(supervisor_name)
 
-      dynamic_sup_name
-      |> DynamicSupervisor.which_children()
-      |> Enum.filter(fn
-        # Filter out non-DurableServer children (LifecycleManager, Terminator, TaskSupervisor)
-        {_id, pid, _type, [DurableServer]} when is_pid(pid) ->
-          true
+    dynamic_sup_name
+    |> DynamicSupervisor.which_children()
+    |> Enum.filter(fn
+      # Filter out non-DurableServer children (LifecycleManager, Terminator, TaskSupervisor)
+      {_id, pid, _type, [DurableServer]} when is_pid(pid) ->
+        true
 
-        _ ->
-          false
-      end)
-    catch
-      :exit, {:noproc, _} ->
-        # supervisor already gone
-        []
-    end
+      _ ->
+        false
+    end)
+  catch
+    :exit, {:noproc, _} ->
+      # supervisor already gone
+      []
   end
 end

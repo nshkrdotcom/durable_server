@@ -4,8 +4,8 @@ defmodule DurableServer.MirrorBackendE2ETest do
   import DurableServer.TestHelper
 
   alias DurableServer.Backends.{EKVStore, MirrorStore, ObjectStore}
-  alias DurableServer.StoredState
   alias DurableServer.StorageBackend
+  alias DurableServer.StoredState
   alias DurableServer.TestCounterServer, as: CounterServer
 
   @moduletag :integration

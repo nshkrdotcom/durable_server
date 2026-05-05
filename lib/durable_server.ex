@@ -856,7 +856,7 @@ defmodule DurableServer do
       @vsn unquote(vsn)
       import unquote(__MODULE__)
 
-      def __durable_server_config__() do
+      def __durable_server_config__ do
         %{
           vsn: @vsn
         }
@@ -1390,7 +1390,6 @@ defmodule DurableServer do
     storage_key = prefix <> key
 
     case acquire_delete_lock(store, %{key: key, prefix: prefix}) do
-      # TODO have lifecycle manager handle cleaning up delete locks that failed at this point
       :ok ->
         # successfully acquired lock and marked as :deleting, now delete the object
         case StorageBackend.delete_object(store, storage_key) do
@@ -2783,17 +2782,15 @@ defmodule DurableServer do
       when is_atom(supervisor_name) and is_binary(storage_key) do
     # Fetch the current etag from storage for conflict resolution
     # This is called during group conflict resolution
-    try do
-      %{storage_backend: store} = DurableServer.Supervisor.__get_config__(supervisor_name)
+    %{storage_backend: store} = DurableServer.Supervisor.__get_config__(supervisor_name)
 
-      case StorageBackend.get_object(store, storage_key, consistent: true) do
-        {:ok, %{etag: etag}} -> {:ok, etag}
-        {:error, _} = error -> error
-      end
-    catch
-      kind, reason ->
-        {:error, {kind, reason}}
+    case StorageBackend.get_object(store, storage_key, consistent: true) do
+      {:ok, %{etag: etag}} -> {:ok, etag}
+      {:error, _} = error -> error
     end
+  catch
+    kind, reason ->
+      {:error, {kind, reason}}
   end
 
   @doc false
@@ -3105,14 +3102,12 @@ defmodule DurableServer do
 
   defp erpc_call(node, mod, func, args, timeout \\ 5_000)
        when is_atom(mod) and is_atom(func) and is_list(args) and is_integer(timeout) do
-    try do
-      DurableServer.Supervisor.safe_erpc_call(node, mod, func, args, timeout)
-    catch
-      :throw, value -> {:error, {:throw, value}}
-      :exit, reason -> {:error, {:exit, reason}}
-      :error, {:erpc, reason} -> {:error, {:erpc, reason}}
-      :error, {exception, reason, stack} -> {:error, {exception, reason, stack}}
-    end
+    DurableServer.Supervisor.safe_erpc_call(node, mod, func, args, timeout)
+  catch
+    :throw, value -> {:error, {:throw, value}}
+    :exit, reason -> {:error, {:exit, reason}}
+    :error, {:erpc, reason} -> {:error, {:erpc, reason}}
+    :error, {exception, reason, stack} -> {:error, {exception, reason, stack}}
   end
 
   defp dump_user_state(%DurableServer{} = state) do

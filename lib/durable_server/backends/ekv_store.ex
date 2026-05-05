@@ -651,13 +651,11 @@ defmodule DurableServer.Backends.EKVStore do
   end
 
   defp fetch_config(state, name) do
-    try do
-      {:ok, ekv_get_config(state, name)}
-    rescue
-      _ -> {:error, {:ekv_not_started, name}}
-    catch
-      _, _ -> {:error, {:ekv_not_started, name}}
-    end
+    {:ok, ekv_get_config(state, name)}
+  rescue
+    _ -> {:error, {:ekv_not_started, name}}
+  catch
+    _, _ -> {:error, {:ekv_not_started, name}}
   end
 
   defp ensure_cas_config(%{mode: :client}) do

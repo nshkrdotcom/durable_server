@@ -158,7 +158,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
       assert cooldown_ms == @default_config.module_circuit_breaker_cooldown_ms
 
-      # Simulate cooldown expiring by manually setting cooldown_until to past time  
+      # Simulate cooldown expiring by manually setting cooldown_until to past time
       # but keep the count at threshold
       current_time = System.system_time(:millisecond)
       # 1 second ago
@@ -264,7 +264,7 @@ defmodule DurableServer.CircuitBreakerTest do
       # Simulate some time passing by manually adjusting cooldown_until
       current_time = System.system_time(:millisecond)
       # 10 seconds remaining
-      partial_cooldown = current_time + 10000
+      partial_cooldown = current_time + 10_000
 
       :ets.insert(
         circuit_breaker.table_name,
@@ -275,7 +275,7 @@ defmodule DurableServer.CircuitBreakerTest do
       assert {:circuit_open, remaining_cooldown} =
                CircuitBreaker.check_module_circuit_breaker(circuit_breaker, TestModule)
 
-      assert remaining_cooldown <= 10000
+      assert remaining_cooldown <= 10_000
       assert remaining_cooldown > 0
     end
 
@@ -329,7 +329,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
     test "preserves cooldown_until when incrementing", %{circuit_breaker: circuit_breaker} do
       current_time = System.system_time(:millisecond)
-      cooldown_until = current_time + 10000
+      cooldown_until = current_time + 10_000
 
       # Manually set a cooldown
       :ets.insert(circuit_breaker.table_name, {TestModule, 5, current_time, cooldown_until})
@@ -664,7 +664,7 @@ defmodule DurableServer.CircuitBreakerTest do
       current_time = System.system_time(:millisecond)
       window_ms = @default_config.module_circuit_breaker_window_ms
       stale_time = current_time - window_ms - 1000
-      active_cooldown = current_time + 10000
+      active_cooldown = current_time + 10_000
 
       # Insert old entries with active cooldowns
       :ets.insert(circuit_breaker.table_name, {TestModule1, 10, stale_time, active_cooldown})
@@ -690,7 +690,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
       # Entry should be removed since cooldown expired and last_reset is old
       remaining = :ets.tab2list(circuit_breaker.table_name)
-      assert length(remaining) == 0
+      assert remaining == []
     end
 
     test "handles edge case where cooldown_until equals current_time", %{
@@ -707,7 +707,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
       # Entry should be removed since cooldown_until <= current_time
       remaining = :ets.tab2list(circuit_breaker.table_name)
-      assert length(remaining) == 0
+      assert remaining == []
     end
 
     test "handles mixed scenarios with multiple modules", %{circuit_breaker: circuit_breaker} do
@@ -779,7 +779,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
       # Should be removed with short window
       remaining = :ets.tab2list(circuit_breaker.table_name)
-      assert length(remaining) == 0
+      assert remaining == []
     end
 
     test "handles empty ETS table gracefully", %{circuit_breaker: circuit_breaker} do
@@ -806,7 +806,7 @@ defmodule DurableServer.CircuitBreakerTest do
       # Boundary case 1: last_reset exactly equals window_start (should NOT be removed)
       :ets.insert(circuit_breaker.table_name, {BoundaryModule1, 1, window_start, 0})
 
-      # Boundary case 2: last_reset is 1ms before window_start (should be removed)  
+      # Boundary case 2: last_reset is 1ms before window_start (should be removed)
       :ets.insert(circuit_breaker.table_name, {BoundaryModule2, 1, window_start - 1, 0})
 
       # Boundary case 3: cooldown_until is 1ms in future (should NOT be removed even if old)
@@ -978,7 +978,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
       # simulate some time passing by manually adjusting cooldown_until
       current_time = System.system_time(:millisecond)
-      partial_cooldown = current_time + 10000
+      partial_cooldown = current_time + 10_000
 
       :ets.insert(
         circuit_breaker.table_name,
@@ -990,7 +990,7 @@ defmodule DurableServer.CircuitBreakerTest do
       assert {:circuit_open, remaining_cooldown} =
                CircuitBreaker.check_global_lock_circuit_breaker(circuit_breaker)
 
-      assert remaining_cooldown <= 10000
+      assert remaining_cooldown <= 10_000
       assert remaining_cooldown > 0
     end
   end
@@ -1025,7 +1025,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
     test "preserves cooldown_until when incrementing", %{circuit_breaker: circuit_breaker} do
       current_time = System.system_time(:millisecond)
-      cooldown_until = current_time + 10000
+      cooldown_until = current_time + 10_000
 
       # manually set a cooldown
       :ets.insert(

@@ -1276,10 +1276,12 @@ defmodule DurableServer.Supervisor do
     if retries > 0, do: Process.sleep(250)
 
     # we raced a start, retry start child to grab raced pid's metadata
-    # node-local group meta will be immediately there, but remote node meta could still be in flight (or pid is already DOWN)
+    # node-local group meta will be immediately there, but remote node meta
+    # could still be in flight, or pid may already be DOWN.
     # if we find there is nothing in the registry, we RPC out to get remote node's meta.
     # if we find nothing there, we retry the start + lookup combo which will either get
-    # the already started pid and its now synced metadata, or we end up starting ourselves up to @max_start_child_tries tries
+    # the already started pid and its now synced metadata, or we end up
+    # starting ourselves up to @max_start_child_tries tries
     case lookup(supervisor, key) do
       {pid, meta} ->
         {:error, {:already_started, {pid, meta}}}
