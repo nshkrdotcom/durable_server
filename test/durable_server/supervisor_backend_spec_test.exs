@@ -340,7 +340,7 @@ defmodule DurableServer.SupervisorBackendSpecTest do
     supervisor_name = unique_supervisor_name("shutdown_warning")
     prefix = unique_prefix("shutdown_warning")
     unique_id = System.unique_integer([:positive, :monotonic])
-    ekv_name = :"durable_shutdown_warning_ekv_#{unique_id}"
+    ekv_name = unique_atom(:durable_shutdown_warning_ekv)
     data_dir = Path.join(System.tmp_dir!(), "durable_shutdown_warning_#{unique_id}")
 
     log =
@@ -510,7 +510,7 @@ defmodule DurableServer.SupervisorBackendSpecTest do
   end
 
   defp unique_supervisor_name(label) do
-    :"durable_backend_spec_#{label}_#{System.unique_integer([:positive, :monotonic])}"
+    unique_atom(label)
   end
 
   defp unique_prefix(label) do

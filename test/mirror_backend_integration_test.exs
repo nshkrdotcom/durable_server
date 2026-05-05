@@ -1,6 +1,8 @@
 defmodule DurableServer.MirrorBackendIntegrationTest do
   use ExUnit.Case, async: false
 
+  import DurableServer.TestHelper
+
   alias DurableServer.Backends.EKVStore
   alias DurableServer.Backends.MirrorStore
   alias DurableServer.StorageBackend
@@ -62,8 +64,8 @@ defmodule DurableServer.MirrorBackendIntegrationTest do
   setup do
     unique_id = System.unique_integer([:positive, :monotonic])
 
-    primary_name = :"durable_mirror_primary_#{unique_id}"
-    secondary_name = :"durable_mirror_secondary_#{unique_id}"
+    primary_name = unique_atom(:durable_mirror_primary)
+    secondary_name = unique_atom(:durable_mirror_secondary)
 
     primary_dir = Path.join(System.tmp_dir!(), "durable_server_mirror_primary_#{unique_id}")
 
@@ -225,5 +227,5 @@ defmodule DurableServer.MirrorBackendIntegrationTest do
     StorageBackend.new(MirrorStore, state)
   end
 
-  defp ekv_mod, do: :"Elixir.EKV"
+  defp ekv_mod, do: EKV
 end

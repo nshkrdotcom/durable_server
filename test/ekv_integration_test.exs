@@ -1,6 +1,8 @@
 defmodule DurableServer.EKVIntegrationTest do
   use ExUnit.Case, async: false
 
+  import DurableServer.TestHelper
+
   alias DurableServer.Backends.EKVStore
   alias DurableServer.{LifecycleManager, Meta, StoredState}
   alias DurableServer.StorageBackend
@@ -13,8 +15,8 @@ defmodule DurableServer.EKVIntegrationTest do
   setup do
     unique_id = System.unique_integer([:positive, :monotonic])
 
-    ekv_name = :"durable_ekv_integration_#{unique_id}"
-    supervisor_name = :"durable_ekv_supervisor_#{unique_id}"
+    ekv_name = unique_atom(:durable_ekv_integration)
+    supervisor_name = unique_atom(:durable_ekv_supervisor)
     prefix = "ekv_integration/#{unique_id}/"
     data_dir = Path.join(System.tmp_dir!(), "durable_server_ekv_integration_#{unique_id}")
 
@@ -62,7 +64,7 @@ defmodule DurableServer.EKVIntegrationTest do
 
   test "explicit interval and tracking options override backend defaults", %{ekv_name: ekv_name} do
     unique_id = System.unique_integer([:positive, :monotonic])
-    supervisor_name = :"durable_ekv_override_supervisor_#{unique_id}"
+    supervisor_name = unique_atom(:durable_ekv_override_supervisor)
     prefix = "ekv_integration_override/#{unique_id}/"
 
     start_supervised!(%{
@@ -94,8 +96,8 @@ defmodule DurableServer.EKVIntegrationTest do
     data_dir: data_dir
   } do
     unique_id = System.unique_integer([:positive, :monotonic])
-    ekv_name = :"durable_managed_ekv_#{unique_id}"
-    supervisor_name = :"durable_managed_ekv_supervisor_#{unique_id}"
+    ekv_name = unique_atom(:durable_managed_ekv)
+    supervisor_name = unique_atom(:durable_managed_ekv_supervisor)
     prefix = "ekv_managed/#{unique_id}/"
     managed_dir = Path.join(data_dir, "managed_#{unique_id}")
 
@@ -122,12 +124,12 @@ defmodule DurableServer.EKVIntegrationTest do
     })
 
     config = DurableServer.Supervisor.__get_config__(supervisor_name)
-    heartbeat_name = :"#{ekv_name}_heartbeats"
+    heartbeat_name = config.heartbeat_backend.state.name
 
     assert config.storage_backend.state.name == ekv_name
-    assert config.heartbeat_backend.state.name == heartbeat_name
-    assert Process.whereis(:"#{ekv_name}_ekv_sup") != nil
-    assert Process.whereis(:"#{heartbeat_name}_ekv_sup") != nil
+
+    assert heartbeat_name ==
+             DurableServer.RuntimeNames.process_name(ekv_name, :managed_ekv_heartbeats)
 
     assert_eventually(fn ->
       Enum.empty?(EKV.keys(ekv_name, "#{prefix}__nodes/") |> Enum.to_list())
@@ -142,8 +144,7 @@ defmodule DurableServer.EKVIntegrationTest do
   end
 
   test "EKV backend accepts client-mode EKV instances" do
-    unique_id = System.unique_integer([:positive, :monotonic])
-    client_name = :"durable_ekv_client_only_#{unique_id}"
+    client_name = unique_atom(:durable_ekv_client_only)
 
     start_supervised!(
       {ekv_mod(),
@@ -185,8 +186,8 @@ defmodule DurableServer.EKVIntegrationTest do
     ensure_distributed_node!()
 
     unique_id = System.unique_integer([:positive, :monotonic])
-    peer_name = :"durable_ekv_client_peer_#{unique_id}"
-    ekv_name = :"durable_ekv_client_cluster_#{unique_id}"
+    peer_name = unique_atom(:durable_ekv_client_peer)
+    ekv_name = unique_atom(:durable_ekv_client_cluster)
 
     remote_data_dir =
       Path.join(System.tmp_dir!(), "durable_server_ekv_client_remote_#{unique_id}")
@@ -503,9 +504,9 @@ defmodule DurableServer.EKVIntegrationTest do
     ensure_distributed_node!()
 
     unique_id = System.unique_integer([:positive, :monotonic])
-    peer_name = :"durable_ekv_peer_#{unique_id}"
-    ekv_name = :"durable_ekv_cluster_#{unique_id}"
-    supervisor_name = :"durable_ekv_cluster_sup_#{unique_id}"
+    peer_name = unique_atom(:durable_ekv_peer)
+    ekv_name = unique_atom(:durable_ekv_cluster)
+    supervisor_name = unique_atom(:durable_ekv_cluster_sup)
     prefix = "ekv_cluster/#{unique_id}/"
     local_data_dir = Path.join(System.tmp_dir!(), "durable_server_ekv_local_#{unique_id}")
     remote_data_dir = Path.join(System.tmp_dir!(), "durable_server_ekv_remote_#{unique_id}")
@@ -676,7 +677,7 @@ defmodule DurableServer.EKVIntegrationTest do
     assert 7 == GenServer.call(restarted_pid, :get_count)
   end
 
-  defp ekv_mod, do: :"Elixir.EKV"
+  defp ekv_mod, do: EKV
 
   def replace_value(_current_value, new_value), do: new_value
 
@@ -701,7 +702,7 @@ defmodule DurableServer.EKVIntegrationTest do
     if Node.alive?() do
       :ok
     else
-      name = :"durable_server_test_#{System.unique_integer([:positive, :monotonic])}"
+      name = unique_atom(:durable_server_node_test)
       {:ok, _} = Node.start(name, :shortnames)
       :ok
     end

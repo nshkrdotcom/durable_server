@@ -24,7 +24,7 @@ defmodule DurableServer.WatermarkTest do
   end
 
   setup do
-    supervisor_name = :"test_supervisor_#{:erlang.unique_integer([:positive])}"
+    supervisor_name = unique_atom(:watermark_supervisor)
     prefix = "watermark_test_#{:erlang.unique_integer([:positive])}/"
 
     {:ok, supervisor_name: supervisor_name, prefix: prefix}
@@ -328,7 +328,7 @@ defmodule DurableServer.WatermarkTest do
     end
 
     test "rejects invalid max_cpu zero value" do
-      supervisor_name = :"test_supervisor_cpu_#{:erlang.unique_integer([:positive])}"
+      supervisor_name = unique_atom(:watermark_supervisor_cpu)
       prefix = "watermark_test_cpu_#{:erlang.unique_integer([:positive])}/"
 
       assert_raise_message_contains(RuntimeError, "max_cpu must be a positive integer", fn ->
@@ -355,7 +355,7 @@ defmodule DurableServer.WatermarkTest do
     end
 
     test "rejects invalid max_memory negative value" do
-      supervisor_name = :"test_supervisor_mem_#{:erlang.unique_integer([:positive])}"
+      supervisor_name = unique_atom(:watermark_supervisor_mem)
       prefix = "watermark_test_mem_#{:erlang.unique_integer([:positive])}/"
 
       assert_raise_message_contains(RuntimeError, "max_memory must be an integer", fn ->
@@ -385,7 +385,7 @@ defmodule DurableServer.WatermarkTest do
     end
 
     test "rejects invalid max_disk with zero percent" do
-      supervisor_name = :"test_supervisor_disk_#{:erlang.unique_integer([:positive])}"
+      supervisor_name = unique_atom(:watermark_supervisor_disk)
       prefix = "watermark_test_disk_#{:erlang.unique_integer([:positive])}/"
 
       assert_raise_message_contains(RuntimeError, "max_disk must be", fn ->

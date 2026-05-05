@@ -7,43 +7,9 @@ defmodule DurableServer.SourcePolicyTest do
     assert_no_token_hits(pattern_engine_tokens(), code_files())
   end
 
-  test "runtime source does not create atoms from runtime strings" do
+  test "repo-owned code does not create atoms from runtime strings" do
     assert_no_token_hits(atom_conversion_tokens(), code_files())
-    assert_no_quoted_atom_interpolation(runtime_files())
-  end
-
-  defp assert_no_token_hits(tokens, files) do
-    hits =
-      for file <- files,
-          token <- tokens,
-          content = File.read!(file),
-          String.contains?(content, token) do
-        {file, token}
-      end
-
-    assert hits == []
-  end
-
-  defp assert_no_quoted_atom_interpolation(files) do
-    hits =
-      for file <- files,
-          content = File.read!(file),
-          quoted_atom_interpolation?(content) do
-        file
-      end
-
-    assert hits == []
-  end
-
-  defp code_files do
-    tracked_files()
-    |> Enum.filter(&code_file?/1)
-    |> Enum.reject(&(&1 == @excluded_path))
-  end
-
-  defp runtime_files do
-    tracked_files()
-    |> Enum.filter(&(String.starts_with?(&1, "lib/") and String.ends_with?(&1, [".ex", ".exs"])))
+    assert_no_quoted_atom_interpolation(code_files())
   end
 
   defp tracked_files do
@@ -52,7 +18,8 @@ defmodule DurableServer.SourcePolicyTest do
   end
 
   defp code_file?(path) do
-    String.ends_with?(path, [".ex", ".exs"]) or path in ["mix.exs", ".formatter.exs"]
+    String.ends_with?(path, [".ex", ".exs"]) or
+      path in ["mix.exs", ".formatter.exs", ".credo.exs"]
   end
 
   defp pattern_engine_tokens do
@@ -83,8 +50,38 @@ defmodule DurableServer.SourcePolicyTest do
       "binary_to_" <> "atom",
       "binary_to_existing_" <> "atom",
       "list_to_" <> "atom",
-      "list_to_existing_" <> "atom"
+      "list_to_existing_" <> "atom",
+      "Module." <> "concat"
     ]
+  end
+
+  defp assert_no_token_hits(tokens, files) do
+    hits =
+      for file <- files,
+          token <- tokens,
+          content = File.read!(file),
+          String.contains?(content, token) do
+        {file, token}
+      end
+
+    assert hits == []
+  end
+
+  defp assert_no_quoted_atom_interpolation(files) do
+    hits =
+      for file <- files,
+          content = File.read!(file),
+          quoted_atom_interpolation?(content) do
+        file
+      end
+
+    assert hits == []
+  end
+
+  defp code_files do
+    tracked_files()
+    |> Enum.filter(&code_file?/1)
+    |> Enum.reject(&(&1 == @excluded_path))
   end
 
   defp quoted_atom_interpolation?(content) do

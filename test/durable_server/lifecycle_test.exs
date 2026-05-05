@@ -379,7 +379,7 @@ defmodule DurableServer.LifecycleTest do
 
   setup do
     # Create test supervisor for this test
-    supervisor_name = :"test_supervisor_#{DurableServer.UUID.uuid4()}"
+    supervisor_name = unique_atom(:lifecycle_supervisor)
     prefix = "test_#{DurableServer.UUID.uuid4()}/"
 
     _supervisor_pid =
@@ -791,7 +791,7 @@ defmodule DurableServer.LifecycleTest do
     end
 
     test "discovery does not keep cached skip entries when heartbeat confirmation hits a consistent-read conflict" do
-      supervisor_name = :"test_supervisor_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:lifecycle_conflict_supervisor)
       prefix = "test_#{DurableServer.UUID.uuid4()}/"
       node_str = "remote-conflict@test"
       heartbeat_key = "#{prefix}__nodes/#{node_str}"
@@ -859,7 +859,7 @@ defmodule DurableServer.LifecycleTest do
     end
 
     test "running orphan proved expired by the first heartbeat read can still be claimed even if a second read would conflict" do
-      supervisor_name = :"test_supervisor_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:lifecycle_orphan_supervisor)
       prefix = "test_#{DurableServer.UUID.uuid4()}/"
       node_str = "remote-once-missing@test"
       heartbeat_key = "#{prefix}__nodes/#{node_str}"
@@ -1480,10 +1480,9 @@ defmodule DurableServer.LifecycleTest do
   end
 
   # Helper to start a dedicated LifecycleManager for testing without supervisor conflicts
-  defp start_standalone_lifecycle_manager(base_supervisor_name, config, opts \\ []) do
+  defp start_standalone_lifecycle_manager(_base_supervisor_name, config, opts \\ []) do
     # Create a unique supervisor name for standalone LifecycleManager testing
-    standalone_supervisor_name =
-      :"#{base_supervisor_name}_standalone_#{DurableServer.UUID.uuid4()}"
+    standalone_supervisor_name = unique_atom(:standalone_lifecycle_manager)
 
     table_name =
       DurableServer.RuntimeNames.new_table!(standalone_supervisor_name, :supervisor_config, [
@@ -1636,7 +1635,7 @@ defmodule DurableServer.LifecycleTest do
     end
 
     test "restart claimer gate uses LM-local gate age, not object age" do
-      supervisor_name = :"restart_gate_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:restart_gate)
       setup_restart_gate_tables(supervisor_name)
 
       now = System.system_time(:millisecond)
@@ -1713,7 +1712,7 @@ defmodule DurableServer.LifecycleTest do
     end
 
     test "restart claimer gate does not strand keys when local node is absent from candidate view" do
-      supervisor_name = :"restart_gate_absent_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:restart_gate_absent)
       setup_restart_gate_tables(supervisor_name)
 
       now = System.system_time(:millisecond)
@@ -1749,7 +1748,7 @@ defmodule DurableServer.LifecycleTest do
     end
 
     test "restart claimer gate bypasses hashing when the local candidate tail fits in one restart wave" do
-      supervisor_name = :"restart_gate_small_tail_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:restart_gate_small_tail)
       setup_restart_gate_tables(supervisor_name)
 
       now = System.system_time(:millisecond)

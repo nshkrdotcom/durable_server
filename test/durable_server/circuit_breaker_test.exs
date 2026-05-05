@@ -592,7 +592,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
   describe "prune_stale_entries/1" do
     setup do
-      supervisor_name = :"test_supervisor_prune_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:test_supervisor_prune)
       circuit_breaker = CircuitBreaker.new(supervisor_name, @default_config)
       %{circuit_breaker: circuit_breaker}
     end
@@ -765,7 +765,7 @@ defmodule DurableServer.CircuitBreakerTest do
     test "prunes entries based on different time window configurations" do
       # Test with shorter time window
       short_window_config = %{@default_config | module_circuit_breaker_window_ms: 1000}
-      supervisor_name = :"test_supervisor_prune_short_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:test_supervisor_prune_short)
       circuit_breaker = CircuitBreaker.new(supervisor_name, short_window_config)
 
       current_time = System.system_time(:millisecond)
@@ -834,7 +834,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
   describe "check_global_lock_circuit_breaker/1" do
     setup do
-      supervisor_name = :"test_supervisor_global_lock_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:test_supervisor_global_lock)
       circuit_breaker = CircuitBreaker.new(supervisor_name, @default_config)
       %{circuit_breaker: circuit_breaker}
     end
@@ -997,7 +997,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
   describe "increment_global_lock_failures/1" do
     setup do
-      supervisor_name = :"test_supervisor_global_inc_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:test_supervisor_global_inc)
       circuit_breaker = CircuitBreaker.new(supervisor_name, @default_config)
       %{circuit_breaker: circuit_breaker}
     end
@@ -1064,7 +1064,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
   describe "global lock circuit breaker integration" do
     test "circuit breaker protects against network partition lock storms" do
-      supervisor_name = :"test_supervisor_partition_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:test_supervisor_partition)
 
       # use short thresholds for faster testing
       config = %{
@@ -1101,7 +1101,7 @@ defmodule DurableServer.CircuitBreakerTest do
     end
 
     test "circuit breaker respects custom configuration values" do
-      supervisor_name = :"test_supervisor_custom_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:test_supervisor_custom)
 
       custom_config = %{
         @default_config
@@ -1131,7 +1131,7 @@ defmodule DurableServer.CircuitBreakerTest do
 
   describe "placement node timeout circuit breaker" do
     setup do
-      supervisor_name = :"test_supervisor_placement_timeout_#{DurableServer.UUID.uuid4()}"
+      supervisor_name = unique_atom(:test_supervisor_placement_timeout)
       circuit_breaker = CircuitBreaker.new(supervisor_name, @default_config)
       %{circuit_breaker: circuit_breaker}
     end

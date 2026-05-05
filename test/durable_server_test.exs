@@ -73,7 +73,7 @@ defmodule DurableServerTest do
 
   defp start_test_supervisor(extra_opts \\ []) do
     unique_id = "#{System.system_time(:microsecond)}_#{DurableServer.UUID.uuid4()}"
-    supervisor_name = :"test_supervisor_#{unique_id}"
+    supervisor_name = unique_atom(:test_supervisor)
     prefix = "test_#{unique_id}/"
 
     base_opts = [
@@ -1057,7 +1057,7 @@ defmodule DurableServerTest do
     test "receives user-defined init_info from supervisor config" do
       # Start a supervisor with custom init_info
       prefix = "init-info-custom-#{DurableServer.UUID.uuid4()}/"
-      supervisor_name = :"init_info_test_sup_#{System.unique_integer([:positive])}"
+      supervisor_name = unique_atom(:init_info_test_sup)
 
       {:ok, _sup_pid} =
         DurableServer.Supervisor.start_link(
@@ -2898,8 +2898,7 @@ defmodule DurableServerTest do
 
     test "returns nil for non-existent supervisor" do
       # use a unique supervisor name that definitely doesn't exist
-      non_existent_name =
-        :"definitely_non_existent_supervisor_#{DurableServer.UUID.uuid4()}"
+      non_existent_name = unique_atom(:definitely_non_existent_supervisor)
 
       # this should handle the error gracefully and return nil
       result = DurableServer.Supervisor.lookup(non_existent_name, "some_key")

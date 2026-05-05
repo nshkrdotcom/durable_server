@@ -83,6 +83,33 @@ defmodule DurableServer.MicroStatePolicyTest do
     assert :ok = MicroStatePolicy.validate_stale_read(receipt, :stale)
   end
 
+  test "unknown micro-state categories are rejected without atom creation" do
+    assert {:error, {:unknown_micro_state_category, "unknown_micro_state"}} =
+             MicroStatePolicy.classify("unknown_micro_state")
+
+    assert {:error, {:unknown_micro_state_category, :unknown_micro_state}} =
+             MicroStatePolicy.classify(:unknown_micro_state)
+  end
+
+  test "unknown recovery cursor and lease-view categories fail closed" do
+    assert {:error, {:unknown_micro_state_category, "recovery_state_unknown"}} =
+             MicroStatePolicy.recovery_receipt("recovery_state_unknown", refs())
+
+    assert {:error, {:unknown_micro_state_category, "cursor_state_unknown"}} =
+             MicroStatePolicy.recovery_receipt("cursor_state_unknown", refs())
+
+    assert {:error, {:unknown_micro_state_category, "boundary_lease_unknown"}} =
+             MicroStatePolicy.recovery_receipt("boundary_lease_unknown", refs())
+  end
+
+  test "stale-read freshness values fail closed" do
+    assert {:ok, receipt} =
+             MicroStatePolicy.recovery_receipt(:boundary_lease_view, refs())
+
+    assert {:error, {:unknown_stale_read_freshness, :expired}} =
+             MicroStatePolicy.validate_stale_read(receipt, :expired)
+  end
+
   defp refs do
     %{
       state_ref: "micro-state://tenant-1/session/1",

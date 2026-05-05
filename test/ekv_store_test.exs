@@ -1,6 +1,8 @@
 defmodule DurableServer.EKVStoreTest do
   use ExUnit.Case, async: true
 
+  import DurableServer.TestHelper
+
   alias DurableServer.Backends.EKVStore
   alias DurableServer.StorageBackend
 
@@ -52,7 +54,7 @@ defmodule DurableServer.EKVStoreTest do
   end
 
   setup do
-    name = :"ekv_store_test_#{System.unique_integer([:positive, :monotonic])}"
+    name = unique_atom(:ekv_store_test)
 
     backend_opts = [
       name: name,

@@ -14,7 +14,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
   setup do
     unique_id = System.unique_integer([:positive, :monotonic])
     prefix = "mirror_e2e/#{unique_id}/"
-    ekv_name = :"durable_mirror_e2e_#{unique_id}"
+    ekv_name = unique_atom(:durable_mirror_e2e)
     data_dir = Path.join(System.tmp_dir!(), "durable_server_mirror_e2e_#{unique_id}")
 
     File.rm_rf(data_dir)
@@ -90,7 +90,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
 
   test "strict phase 1 boot fails when EKV is unavailable", context do
     supervisor_name = unique_supervisor_name("shadow_boot_fail")
-    missing_ekv_name = :"missing_ekv_#{System.unique_integer([:positive, :monotonic])}"
+    missing_ekv_name = unique_atom(:missing_ekv)
 
     assert_raise_message_contains(RuntimeError, "failed to start child with the spec", fn ->
       start_durable_supervisor!(
@@ -104,7 +104,7 @@ defmodule DurableServer.MirrorBackendE2ETest do
 
   test "strict phase 1 write fails when mirrored EKV write fails", context do
     unique_id = System.unique_integer([:positive, :monotonic])
-    ekv_name = :"durable_mirror_write_fail_#{unique_id}"
+    ekv_name = unique_atom(:durable_mirror_write_fail)
     supervisor_name = unique_supervisor_name("shadow_write_fail")
     prefix = "mirror_e2e/write_fail/#{unique_id}/"
     key = "shadow-write-fail"
@@ -449,10 +449,10 @@ defmodule DurableServer.MirrorBackendE2ETest do
   defp storage_key(prefix, key), do: prefix <> key
 
   defp unique_supervisor_name(label) do
-    :"durable_mirror_#{label}_#{System.unique_integer([:positive, :monotonic])}"
+    unique_atom(label)
   end
 
-  defp ekv_mod, do: :"Elixir.EKV"
+  defp ekv_mod, do: EKV
 
   defp assert_eventually(fun, timeout \\ 5_000, interval \\ 25)
        when is_function(fun, 0) and is_integer(timeout) and timeout > 0 do

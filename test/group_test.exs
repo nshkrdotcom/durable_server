@@ -33,7 +33,7 @@ defmodule GroupTest do
   end
 
   setup do
-    supervisor_name = :"test_cluster_#{DurableServer.UUID.uuid4()}"
+    supervisor_name = unique_atom(:test_cluster)
     prefix = "test_cluster_#{DurableServer.UUID.uuid4()}/"
 
     _supervisor_pid =
@@ -429,7 +429,7 @@ defmodule GroupTest do
     end
 
     test "module membership uses sharded prefix groups" do
-      sup = :"test_cluster_#{DurableServer.UUID.uuid4()}"
+      sup = unique_atom(:test_cluster_module_membership)
       prefix = "test_cluster_#{DurableServer.UUID.uuid4()}/"
       key1 = "module/#{DurableServer.UUID.uuid4()}"
       key2 = "module/#{DurableServer.UUID.uuid4()}"
@@ -568,7 +568,7 @@ defmodule GroupTest do
   describe "multiple supervisors" do
     test "events from one supervisor don't leak to another supervisor's subscribers" do
       # Create a second supervisor
-      supervisor_name_2 = :"test_cluster_2_#{DurableServer.UUID.uuid4()}"
+      supervisor_name_2 = unique_atom(:test_cluster_2)
       prefix_2 = "test_cluster_2_#{DurableServer.UUID.uuid4()}/"
 
       _supervisor_pid_2 =
@@ -613,7 +613,7 @@ defmodule GroupTest do
       supervisor_name: sup1
     } do
       # Create a second supervisor
-      sup2 = :"test_cluster_isolated_#{DurableServer.UUID.uuid4()}"
+      sup2 = unique_atom(:test_cluster_isolated)
       prefix_2 = "test_cluster_isolated_#{DurableServer.UUID.uuid4()}/"
 
       _supervisor_pid_2 =

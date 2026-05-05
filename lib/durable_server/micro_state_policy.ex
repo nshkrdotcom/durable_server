@@ -229,13 +229,19 @@ defmodule DurableServer.MicroStatePolicy do
     end
   end
 
-  @spec validate_stale_read(Receipt.t(), :fresh | :stale) ::
-          :ok | {:error, {:stale_read_rejected, atom()}}
+  @spec validate_stale_read(Receipt.t(), :fresh | :stale | term()) ::
+          :ok
+          | {:error, {:stale_read_rejected, atom()}}
+          | {:error, {:unknown_stale_read_freshness, term()}}
   def validate_stale_read(%Receipt{stale_read: :reject_stale, category: category}, :stale) do
     {:error, {:stale_read_rejected, category}}
   end
 
   def validate_stale_read(%Receipt{}, freshness) when freshness in [:fresh, :stale], do: :ok
+
+  def validate_stale_read(%Receipt{}, freshness) do
+    {:error, {:unknown_stale_read_freshness, freshness}}
+  end
 
   defp reject_raw_material(attrs) do
     blocked = Enum.filter(@raw_material_keys, &Map.has_key?(attrs, &1))

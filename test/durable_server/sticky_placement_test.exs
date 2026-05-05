@@ -29,7 +29,7 @@ defmodule DurableServer.StickyPlacementTest do
   end
 
   setup do
-    supervisor_name = :"test_supervisor_#{:erlang.unique_integer([:positive])}"
+    supervisor_name = unique_atom(:sticky_placement_supervisor)
     prefix = "sticky_placement_test_#{:erlang.unique_integer([:positive])}/"
 
     {:ok, supervisor_name: supervisor_name, prefix: prefix}
