@@ -86,6 +86,13 @@ governed runtime deployments, pass durable authority refs with
 authority, leases, provider health state, and trace accumulator secret values
 out of durable state:
 
+Phase 14 durable micro-state policy is executable in
+`DurableServer.MicroStatePolicy`. It records ownership and recovery behavior
+for scratchpads, signal ingress cursors, boundary lease views, rate-limit
+views, provider health, target attach state, connector admission caches,
+session handoff state, and trace accumulators. Receipts are ref-only and define
+restart, replay, stale-read, eviction, conflict, and redaction behavior.
+
 ```elixir
 {DurableServer.Supervisor,
  name: MyDurableSup,
